@@ -1331,13 +1331,19 @@ button { font: inherit; color: inherit; }
  * are the two things most likely to be tapped next, and its Undo sat under the
  * thumb that had just pressed Save. Above the content it interrupts nothing.
  */
+/*
+ * Sized to its message, not to the screen.
+ *
+ * It used to be a fixed 520px bar, so "Signed out." got the same slab of ink as a
+ * sentence. A notice that is mostly empty space reads as a system message; one that
+ * fits what it says reads as an answer to what you just did.
+ */
 .snack {
   position: fixed;
   top: calc(var(--safe-top) + var(--space-3));
-  /* Centred with auto margins, not translateX(-50%). Sharing the transform property
-     between layout and animation meant the entry keyframe's offset could survive the
-     animation, leaving the bar 12px out of place. Layout owns position, the keyframe
-     owns transform. */
+  /* Centred with auto margins, not translateX(-50%). transform belongs to the
+     open/closed animation below, and sharing the property between layout and
+     motion is what once left this bar stranded 12px out of place. */
   left: 0;
   right: 0;
   margin-inline: auto;
@@ -1345,25 +1351,144 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  width: min(calc(100vw - var(--space-8)), 520px);
+  width: fit-content;
+  max-width: min(calc(100vw - var(--space-6)), 480px);
   min-height: var(--tap-min);
-  padding: 0 var(--space-3) 0 var(--space-4);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
   border-radius: var(--r-pill);
   background: var(--ink);
   color: var(--surface);
   font-size: var(--text-caption);
+  line-height: 1.35;
   box-shadow: var(--shadow-raised);
+
+  /*
+   * Closed is the BASE state and open is a class, because the two behave
+   * differently when the browser declines to run the animation.
+   *
+   * The old version toggled `display` and had no entry animation at all, which was
+   * the right call for an animation and the wrong tool for the job: a keyframe
+   * started on a display:none -> shown transition can be created and never
+   * committed, stranding the element on frame one - measured here as a bar that was
+   * either 12px off or fully transparent, permanently.
+   *
+   * A TRANSITION cannot do that. If it never runs, the element still lands on the
+   * target style instantly; only the 280ms of travel is lost. So nothing about
+   * whether this bar is visible depends on an animation succeeding.
+   */
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-10px) scale(0.97);
+  transition:
+    opacity var(--dur-state) var(--ease-exit),
+    transform var(--dur-state) var(--ease-exit),
+    /* Held until the fade finishes, or it would vanish before it faded. */
+    visibility 0s linear var(--dur-state);
 }
-.snack[hidden] { display: none; }
-.snack-text { flex: 1; }
+
+.snack.is-open {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  /* In slower than out: arriving is information, leaving is housekeeping. */
+  transition:
+    opacity var(--dur-sheet) var(--ease),
+    transform var(--dur-sheet) var(--ease),
+    visibility 0s;
+}
+
+/*
+ * The icon says what KIND of thing happened before the sentence is read - saved,
+ * deleted, synced. It is the reason this can stay one short line.
+ */
+.snack-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  opacity: 0.85;
+}
+.snack-icon .icon { width: 1.125rem; height: 1.125rem; }
+
+.snack-text { flex: 1; min-width: 0; }
+
+/*
+ * Undo is a button, and used to look like coloured text. Given the bar auto-dismisses,
+ * the one control on it should not be the element that reads least like a control.
+ * currentColor rather than a fixed hue: the bar inverts in dark mode and a hard-coded
+ * tint would invert with it into something unreadable.
+ */
 .snack-action {
+  flex: none;
   border: 0;
-  background: transparent;
-  color: var(--brand-on-dark);
+  font: inherit;
   font-weight: var(--weight-semibold);
-  padding: var(--space-2) var(--space-3);
+  color: inherit;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  padding: var(--space-2) var(--space-4);
+  min-height: 34px;
   border-radius: var(--r-pill);
   cursor: pointer;
+  transition:
+    background var(--dur-instant) var(--ease),
+    transform var(--dur-instant) var(--ease);
+}
+.snack-action:hover { background: color-mix(in srgb, currentColor 22%, transparent); }
+.snack-action:active { background: color-mix(in srgb, currentColor 30%, transparent); transform: scale(0.96); }
+
+/*
+ * How long Undo has left, and drawn ONLY when there is something to undo.
+ *
+ * On a bar that just reports what happened it would be decoration. On one offering
+ * to reverse a delete it is the missing fact: the choice expires, and without this
+ * the only way to find out how soon is to lose it.
+ *
+ * Inset rather than flush to the edge, because the bar is a pill - a full-width rule
+ * at the bottom of a pill is clipped by the curve into a short stub.
+ */
+/* Room for the countdown, reserved only on the bars that have one - otherwise every
+   toast would carry the padding for a rule most of them never draw. */
+.snack:has(.snack-timer) { padding-bottom: calc(var(--space-2) + 7px); }
+
+.snack-timer {
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: 5px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.3;
+  transform-origin: left center;
+  animation: snack-countdown var(--snack-life, 6000ms) linear forwards;
+}
+@keyframes snack-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+/*
+ * The contents arrive slightly after the bar does, so a toast that REPLACES a
+ * visible one still reads as new rather than as text quietly changing under you.
+ *
+ * These nodes are rebuilt on every call, so the animation always starts - the
+ * display:none trap above cannot apply to an element that did not exist a frame
+ * ago. No fill mode: if it somehow does not run, the resting style is already
+ * correct.
+ */
+@keyframes snack-content-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+.snack-icon, .snack-text, .snack-action {
+  animation: snack-content-in var(--dur-state) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A shrinking bar is motion for its own sake to someone who asked for none; the
+     6-second timeout is unchanged, only its depiction goes. */
+  .snack-timer { display: none; }
 }
 
 /* Dark mode needs a visible edge on every raised surface: shadow alone does not
@@ -1455,19 +1580,17 @@ button { font: inherit; color: inherit; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 /*
- * The snackbar has no entry animation, and that is a decision rather than an
- * omission.
+ * The snackbar's entry and exit live with the component, above.
  *
- * It goes from display:none to shown, and a CSS animation started on that
- * transition can be created but never committed to a rendering frame: playState
- * reads "running" while startTime stays null and currentTime never leaves 0. The
- * element then sits at its first keyframe for good. Measured here: with a transform
- * keyframe it stranded 12px out of place, and with an opacity keyframe it stranded
- * fully transparent, which is a bar that reports what just happened by being
- * invisible.
+ * It used to have none, because an ANIMATION started on a display:none -> shown
+ * transition can be created and never committed to a frame: playState reads
+ * "running" while startTime stays null, and the element sits on keyframe one for
+ * good. Measured here twice - stranded 12px out of place with a transform keyframe,
+ * stranded fully transparent with an opacity one.
  *
- * Position and visibility are not negotiable for this component; 200ms of fade is.
- * So the base style is the resting state and nothing animates it.
+ * The fix was the wrong tool, not the animation: it now transitions between a closed
+ * base state and an .is-open class, and never touches `display`. A transition that
+ * does not run still applies its target style, so the bar cannot end up invisible.
  */
 
 .fab { animation: rise 300ms var(--ease) backwards; }

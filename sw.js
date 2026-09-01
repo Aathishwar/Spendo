@@ -13,7 +13,7 @@
  * network-only: a cached sync response would hand the phone stale balances.
  */
 
-const CACHE = 'spendo-v32';
+const CACHE = 'spendo-v33';
 
 const SHELL = [
   './',

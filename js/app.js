@@ -281,7 +281,7 @@ async function submitCode(email, code) {
     render();
     showSnack(out.isNewPerson
       ? `Signed in as ${out.email}. Loading that account.`
-      : `Signed in as ${out.email}. Sending everything up.`);
+      : `Signed in as ${out.email}. Sending everything up.`, null, null, 'cloud-check');
     sync.signedIn();
   } catch (err) {
     signin = { ...signin, busy: false, error: err.message };
@@ -292,7 +292,7 @@ async function submitCode(email, code) {
 async function doSignOut() {
   await account.signOut();
   render();
-  showSnack('Signed out. Your transactions stay on this phone.');
+  showSnack('Signed out. Your transactions stay on this phone.', null, null, 'sign-out');
 }
 
 /*
@@ -317,23 +317,70 @@ function maybeNudgeSignIn() {
     return;   // storage refused; a nudge is not worth a broken launch
   }
 
-  showSnack('Saved on this phone only. Not backed up.', 'Sign in', openSignIn);
+  showSnack('Saved on this phone only. Not backed up.', 'Sign in', openSignIn, 'cloud-slash');
 }
 
 /* ---------------------------------------------------------------- snackbar */
 
-function showSnack(message, actionLabel, onAction) {
+const SNACK_LIFE = 6000;
+
+/**
+ * Report what just happened, and offer to reverse it if it can be reversed.
+ *
+ * The message is written with textContent, not into innerHTML. It used to be
+ * interpolated into a template string, and one of its callers passes an entry's
+ * description - text the user typed - so `<img onerror=...>` as a description was a
+ * script running on every screen. Only the icon name, which this file chooses from a
+ * fixed set, is ever treated as markup.
+ *
+ * `icon` names the glyph in the vendored sprite. `actionLabel` also switches on the
+ * countdown bar, because a deadline is only worth drawing when something is waiting
+ * on it.
+ */
+function showSnack(message, actionLabel, onAction, iconName = 'check-bold') {
   clearTimeout(snackTimer);
-  snack.innerHTML = `<span class="snack-text">${message}</span>` +
-    (actionLabel ? `<button class="snack-action" type="button" data-action="snack-action">${actionLabel}</button>` : '');
-  snack.hidden = false;
+
+  snack.replaceChildren();
+  snack.style.setProperty('--snack-life', `${SNACK_LIFE}ms`);
+
+  const glyph = document.createElement('span');
+  glyph.className = 'snack-icon';
+  glyph.innerHTML = ui.icon(iconName);
+  snack.append(glyph);
+
+  const text = document.createElement('span');
+  text.className = 'snack-text';
+  text.textContent = message;
+  snack.append(text);
+
+  if (actionLabel) {
+    const button = document.createElement('button');
+    button.className = 'snack-action';
+    button.type = 'button';
+    button.dataset.action = 'snack-action';
+    button.textContent = actionLabel;
+    snack.append(button);
+
+    const timer = document.createElement('span');
+    timer.className = 'snack-timer';
+    snack.append(timer);
+  }
+
+  snack.classList.add('is-open');
   pendingUndo = onAction || null;
-  snackTimer = setTimeout(hideSnack, 6000);
+  snackTimer = setTimeout(hideSnack, SNACK_LIFE);
 }
 
+/*
+ * The class goes; the contents stay until the next message replaces them.
+ *
+ * Emptying it here would remove the text mid-fade, so the bar would spend its exit
+ * animation as an empty pill. It is `visibility: hidden` once closed, so nothing is
+ * readable or reachable in the meantime - including to a screen reader.
+ */
 function hideSnack() {
   clearTimeout(snackTimer);
-  snack.hidden = true;
+  snack.classList.remove('is-open');
   pendingUndo = null;
 }
 
@@ -690,7 +737,7 @@ document.addEventListener('click', (e) => {
         showSnack(`Deleted ${removed.description || category(removed.category).label}`, 'Undo', () => {
           store.restoreEntry(id);
           render();
-        });
+        }, 'trash-simple');
       }
       break;
     }

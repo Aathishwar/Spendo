@@ -68,7 +68,10 @@
   <div id="sheet-content"></div>
 </dialog>
 
-<div id="snack" class="snack" role="status" aria-live="polite" hidden></div>
+<!-- Visibility is owned by app.css (.snack / .snack.is-open), not by the hidden
+     attribute: toggling `display` is what once stranded this element mid-animation.
+     The stylesheet is render-blocking, so there is no frame where it is visible. -->
+<div id="snack" class="snack" role="status" aria-live="polite"></div>
 
 <!-- Phosphor Icons, MIT licence, vendored from @phosphor-icons/core. Inlined rather
      than fetched because Chrome does not resolve <use> against an external file, and
