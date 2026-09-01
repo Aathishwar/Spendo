@@ -1,0 +1,56 @@
+# Render blueprint for Spendo.
+#
+# One web service that serves both the API and the PWA. Same origin on purpose,
+# and not just for convenience: the app is built on the rule that no runtime
+# request leaves our own origin (fonts, icons and scripts are all vendored), the
+# session is a same-origin cookie, and splitting the API onto a second domain
+# would break the first, bring CORS with it, and add a preflight to every sync.
+#
+# After the first deploy, set these in the service's Environment tab. They are
+# marked `sync: false` so they live in Render and never in this repository:
+#
+#   DATABASE_URL      Neon, the POOLED connection string
+#   BREVO_API_KEY     sends the six-digit sign-in code
+#   MAIL_FROM_EMAIL   must be a sender VERIFIED on that Brevo account
+#
+# Then point a cron at https://<service>.onrender.com/healthz every 10 minutes.
+# Render's free tier idles a service after about 15 minutes without a request,
+# and a cold start is 30+ seconds of a phone waiting to record a coffee.
+services:
+  - type: web
+    name: spendo
+    runtime: node
+    plan: free
+    region: singapore
+    # The repo root is the app: index.html, js/, styles/ and the service worker
+    # are served from it. Only the server's dependencies live under server/,
+    # which is why the build runs there while src/index.js still resolves the
+    # app root two levels up from itself.
+    rootDir: server
+    # Migrations run at build, not at boot. Both files are idempotent, so this
+    # is safe on every deploy, and a schema problem fails the build with the
+    # actual Postgres error rather than crash-looping a started service.
+    buildCommand: npm install && npm run migrate
+    startCommand: npm start
+    # Liveness, not readiness: this path touches no database. A health check
+    # that queried Postgres would fail on a brief Neon hiccup and roll back a
+    # deploy that was fine.
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Neon, pooled. `sslmode` in the URL is ignored - server/src/db.js strips
+      # it and decides TLS itself, so the behaviour cannot depend on which
+      # version of node-postgres is installed.
+      - key: DATABASE_URL
+        sync: false
+      # Leave BREVO_API_KEY unset and sign-in codes are printed to the Render
+      # log instead of emailed. That is a usable fallback, not a secure one:
+      # anyone who can read the log can then sign in as anyone.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: MAIL_FROM_EMAIL
+        sync: false
+      # Display name only. Brevo verifies the address, not this.
+      - key: MAIL_FROM_NAME
+        value: Spendo

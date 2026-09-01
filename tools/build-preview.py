@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""
+Spendo - single-file preview build.
+
+Flattens the app into one HTML file so it can be opened from a phone without
+deploying anything. The real app stays multi-file and unbundled; this exists only
+so a preview is always generated from the actual source rather than copied by hand
+and left to drift.
+
+    python tools/build-preview.py            writes dist/spendo-preview.html
+
+Each ES module becomes an IIFE that returns its exports, which keeps every module's
+private names private and avoids the collisions a plain concatenation would cause
+(two modules here both define a local `esc`). Import statements are rewritten to
+destructure from the module object that was already built.
+
+Not a general bundler. It handles the import forms this project actually uses:
+
+    import { a, b } from './x.js';        including the multi-line form
+    import * as ns from './x.js';
+"""
+
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Dependency order. A module may only import from ones above it.
+MODULES = ['format', 'categories', 'charts', 'store', 'ui']
+ENTRY = 'app'
+
+IMPORT_RE = re.compile(
+    r"^import\s+(?P<what>\*\s+as\s+\w+|\{[^}]*\})\s+from\s+'\./(?P<mod>[\w-]+)\.js';\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+EXPORT_DECL_RE = re.compile(r"^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)", re.MULTILINE)
+
+
+def read(*parts):
+    with open(os.path.join(ROOT, *parts), encoding='utf-8') as fh:
+        return fh.read()
+
+
+def rewrite_imports(src):
+    def sub(match):
+        what = match.group('what').strip()
+        mod = match.group('mod')
+        if what.startswith('*'):
+            alias = what.split()[-1]
+            return f'const {alias} = __m_{mod};'
+        names = ' '.join(what.split())
+        return f'const {names} = __m_{mod};'
+    return IMPORT_RE.sub(sub, src)
+
+
+def module_iife(name):
+    src = read('js', f'{name}.js')
+    exports = EXPORT_DECL_RE.findall(src)
+    if not exports:
+        sys.exit(f'{name}.js exports nothing; check the export syntax')
+    body = rewrite_imports(src)
+    body = re.sub(r'^export\s+', '', body, flags=re.MULTILINE)
+    names = ', '.join(exports)
+    return f'/* ---- {name}.js ---- */\nconst __m_{name} = (() => {{\n{body}\nreturn {{ {names} }};\n}})();\n'
+
+
+def build():
+    parts = [module_iife(m) for m in MODULES]
+
+    entry = rewrite_imports(read('js', f'{ENTRY}.js'))
+    # There is no service worker file beside a single-file preview, and a failed
+    # registration would only print a warning the reader cannot act on.
+    entry = re.sub(
+        r"if \('serviceWorker' in navigator\) \{.*?\n\}\n",
+        '/* service worker omitted from the preview build */\n',
+        entry,
+        flags=re.DOTALL,
+    )
+    parts.append(f'/* ---- {ENTRY}.js ---- */\n(() => {{\n{entry}\n}})();\n')
+
+    # The backup export saves a Blob, and a hosted preview is not allowed to hand
+    # the viewer a file. Rather than ship a button that silently does nothing, the
+    # preview drops it and says why.
+    parts[MODULES.index('ui')] = parts[MODULES.index('ui')].replace(
+        """      <div class="btn-row">
+        <button class="btn btn-text" data-action="export-json" type="button">Export a backup</button>
+      </div>""",
+        """      <p class="card-note">Backup export is disabled in this preview. It works in the installed app.</p>""",
+    )
+
+    script = '\n'.join(parts)
+    css = read('styles', 'tokens.css') + '\n' + read('styles', 'app.css')
+
+    html = read('index.html')
+    html = html.replace(
+        '<link rel="stylesheet" href="styles/tokens.css">\n'
+        '<link rel="stylesheet" href="styles/app.css">',
+        f'<style>\n{css}\n</style>',
+    )
+    html = html.replace('<script type="module" src="js/app.js"></script>',
+                        f'<script type="module">\n{script}\n</script>')
+    # Nothing to install and nothing to fetch in a single file.
+    for tag in (
+        '<link rel="manifest" href="manifest.webmanifest">\n',
+        '<link rel="icon" href="icons/icon.svg" type="image/svg+xml">\n',
+        '<link rel="apple-touch-icon" href="icons/icon.svg">\n',
+    ):
+        html = html.replace(tag, '')
+
+    out_dir = os.path.join(ROOT, 'dist')
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, 'spendo-preview.html')
+    with open(out, 'w', encoding='utf-8') as fh:
+        fh.write(html)
+    print(f'{out}  {len(html) / 1024:.0f} KB')
+
+
+if __name__ == '__main__':
+    build()

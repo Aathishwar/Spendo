@@ -1,0 +1,1488 @@
+/**
+ * Spendo - components and screens
+ *
+ * Every value here comes from tokens.css. If a colour, radius or duration appears
+ * as a literal in this file it is a bug, with one exception: the two hairline
+ * alpha values used for pressed states, which are deliberately relative to
+ * whatever is behind them.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--text-body);
+  line-height: 1.45;
+  color: var(--ink);
+  background-color: var(--bg);
+  background-image:
+    repeating-linear-gradient(45deg,  transparent 0 78px, var(--watermark) 78px 79px),
+    repeating-linear-gradient(-45deg, transparent 0 78px, var(--watermark) 78px 79px);
+  background-attachment: fixed;
+  overscroll-behavior-y: none;
+}
+
+h1, h2, p { margin: 0; }
+button { font: inherit; color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-field);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------- shell */
+
+.app {
+  /* dvh, never vh: the Android address bar changes vh mid scroll and the layout
+     jumps. */
+  min-height: 100dvh;
+  display: grid;
+  /* minmax(0, 1fr), not the implicit auto column: a grid item's width floors at its
+     min-content, so one nowrap row would widen the column, widen .view with it, and
+     scroll the whole page sideways. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+}
+
+.view {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4) calc(var(--nav-height) + var(--safe-bottom) + 88px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/*
+ * A screen that ends in a windowed list ends where that window ends. The usual
+ * bottom padding exists to keep the last row out from under the Add button, and a
+ * windowed list already stops short of it; leaving the padding in would let the page
+ * scroll on past the point the list header is supposed to pin at, and the header
+ * would slide off the top of the screen with the list still half full.
+ */
+.view:has(.list-scroll) {
+  padding-bottom: var(--space-4);
+}
+
+.icon {
+  width: 1.25em;
+  height: 1.25em;
+  flex: none;
+  fill: currentColor;
+}
+
+/*
+ * Raster glyphs, drawn as a mask rather than shown as an image, so they take
+ * currentColor exactly as the SVG sprite does. Without this they would be fixed
+ * black art: wrong on a teal button, invisible in dark mode, and unable to tint to
+ * a category hue. The source art is monochrome line work, which is the only kind
+ * that survives being used as an alpha mask.
+ */
+.icon-img {
+  width: 1.25em;
+  height: 1.25em;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask: var(--glyph) center / contain no-repeat;
+  mask: var(--glyph) center / contain no-repeat;
+}
+
+.icon-bill     { --glyph: url('../icons/bill.png'); }
+.icon-paid     { --glyph: url('../icons/paid.png'); }
+.icon-received { --glyph: url('../icons/received.png'); }
+/* A filled silhouette, not line work. It is the only glyph in the app that is
+   solid, and that is deliberate: it sits on the primary action, and a filled shape
+   is the one thing that stays legible at 24px against a saturated fill. Served at
+   128px because it never renders larger than 24 CSS pixels, which is still five
+   times the source it needs on a 3x screen. */
+.icon-rupee    { --glyph: url('../icons/rupee.png'); }
+
+.list-head-icon .icon-img { width: 1.5rem; height: 1.5rem; }
+.seg-btn .icon-img { width: 1.6rem; height: 1.6rem; }
+.fab .icon-img { width: 1.5rem; height: 1.5rem; }
+
+/* ------------------------------------------------------------------ topbar */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--tap-min);
+}
+
+.month-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.screen-title {
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon-btn {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), transform var(--dur-instant) var(--ease);
+}
+.icon-btn:hover { background: var(--surface-hover); }
+.icon-btn:active { transform: scale(var(--press-scale)); }
+.icon-btn:disabled { opacity: 0.35; pointer-events: none; }
+.icon-btn .icon { width: 1.4rem; height: 1.4rem; }
+
+/* ------------------------------------------------------------------- cards */
+
+.card {
+  background: var(--surface);
+  border-radius: var(--r-card);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.card-title {
+  font-size: var(--text-row);
+  font-weight: var(--weight-semibold);
+}
+
+.card-hint, .card-note {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+.card-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.section-title {
+  font-size: var(--text-section);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+  margin-bottom: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- hero card */
+
+/*
+ * The one dark surface on a light screen, and the only place the app raises its
+ * voice. It is near-black rather than a coloured fill: the figure printed on it is
+ * the answer the user opened the app for, and white at 17.7:1 on ink carries more
+ * weight than white on any mid-tone. The gradient is two steps of the same
+ * near-black, not a second colour.
+ */
+.hero-card {
+  gap: var(--space-3);
+  background: linear-gradient(150deg, var(--hero) 0%, var(--hero-edge) 100%);
+  box-shadow: var(--shadow-hero);
+  color: var(--on-hero);
+  border: 0;
+  overflow: hidden;
+}
+
+.hero-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--on-hero-dim);
+}
+
+.hero-figure {
+  font-size: var(--text-hero);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tight);
+  line-height: 1;
+  color: var(--on-hero);
+}
+
+.hero-note {
+  font-size: var(--text-caption);
+  color: var(--on-hero-dim);
+}
+.hero-note .money { font-weight: var(--weight-medium); }
+.hero-card .dot-sep::before { color: var(--on-hero-dim); }
+
+/* A single ratio against a limit, so a meter rather than a chart: one track, one
+   fill, same family of colour, no axis and no legend to read. */
+.meter {
+  display: block;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--on-hero-track);
+  overflow: hidden;
+}
+.meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--on-hero);
+  transition: width var(--dur-sheet) var(--ease);
+}
+
+.meter-sm {
+  height: 4px;
+  margin-top: var(--space-2);
+  max-width: 140px;
+  background: var(--surface-sunken);
+}
+.meter-sm .meter-fill { background: var(--brand); }
+
+/* The one big number a screen leads with. */
+.display {
+  font-size: var(--text-display);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tight);
+  line-height: 1.1;
+}
+
+.is-out { color: var(--spend); }
+.is-in  { color: var(--receive); }
+
+/* A separator, used once per line at most. */
+.dot-sep::before {
+  content: '·';
+  margin: 0 0.35em;
+  color: var(--line-strong);
+}
+
+/* ----------------------------------------------------------------- figures */
+
+/*
+ * Three figures on the page ground, divided by hairlines. They used to be three
+ * identical white cards side by side, which is the most-copied layout on the web
+ * and says nothing: three equal boxes claim the three numbers are three separate
+ * objects when they are one reading of one month.
+ */
+.figures {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.figure {
+  min-width: 0;
+  padding-inline: var(--space-4);
+}
+.figure:first-child { padding-left: 0; }
+.figure:last-child { padding-right: 0; }
+.figure + .figure { border-left: 1px solid var(--line); }
+
+.stat-label {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stat-value {
+  font-size: var(--text-section);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tight);
+  margin-top: 2px;
+}
+
+.stat-note {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------------ charts */
+
+.chart-wrap { position: relative; margin-top: var(--space-2); }
+.chart-daily { display: block; width: 100%; height: auto; overflow: visible; }
+/* ------------------------------------------------------------------- donut */
+
+.donut-card { align-items: center; gap: var(--space-3); }
+
+.donut-wrap {
+  position: relative;
+  width: min(100%, 260px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+}
+
+.chart-donut {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.donut-slice {
+  cursor: pointer;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity var(--dur-state) var(--ease);
+}
+/* Choosing one category quietens the rest rather than hiding them, so the chosen
+   slice is read against the whole and not on its own. */
+.donut-slice.is-dimmed { opacity: 0.32; }
+
+/* The hole is the only part of a donut with room for a number. */
+.donut-centre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+  text-align: center;
+  padding-inline: 22%;
+}
+
+.donut-centre-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donut-centre-figure {
+  font-size: var(--text-display);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tight);
+  line-height: 1.05;
+  color: var(--ink);
+}
+
+.donut-centre-sub {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+.donut-hint { color: var(--ink-3); }
+
+.cat-row.is-dimmed { opacity: 0.5; }
+.cat-row.is-chosen { box-shadow: inset 3px 0 0 var(--ink); background: var(--surface-hover); }
+
+.chart-share { display: block; width: 100%; height: 14px; }
+.chart-rowbar { display: block; width: 100%; height: 4px; margin-top: 6px; }
+.share-wrap { margin-top: var(--space-3); }
+
+.chart-tick {
+  font-size: 10px;
+  fill: var(--ink-3);
+  font-family: var(--font);
+}
+
+.chart-peak {
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  fill: var(--ink-2);
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-hit { cursor: pointer; }
+
+.chart-tip {
+  position: absolute;
+  top: -6px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-field);
+  background: var(--ink);
+  color: var(--surface);
+  font-size: var(--text-caption);
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-raised);
+}
+.chart-tip[hidden] { display: none; }
+.chart-tip b { font-weight: var(--weight-semibold); }
+.chart-tip span { font-variant-numeric: tabular-nums; opacity: 0.85; }
+
+.table-toggle {
+  margin-top: var(--space-3);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+.table-toggle summary {
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-2);
+  font-size: var(--text-caption);
+}
+.data-table th, .data-table td {
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  color: var(--ink-2);
+}
+.data-table td { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table thead th { color: var(--ink-3); font-weight: var(--weight-medium); }
+.data-table tbody tr + tr th, .data-table tbody tr + tr td { border-top: 1px solid var(--line); }
+
+/* -------------------------------------------------------------------- list */
+
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.list-head .section-title { flex: 1; min-width: 0; }
+
+/* The section mark is the glyph itself, no tile behind it. */
+.list-head-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--brand);
+}
+.list-head-icon .icon { width: 1.4rem; height: 1.4rem; }
+
+.list-head-btn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), color var(--dur-state) var(--ease),
+              transform var(--dur-instant) var(--ease);
+}
+.list-head-btn:hover { background: var(--surface-hover); }
+.list-head-btn:active { transform: scale(var(--press-scale)); }
+.list-head-btn.is-on { background: var(--brand-tint); color: var(--brand); }
+.list-head-btn .icon { width: 1.35rem; height: 1.35rem; }
+
+/* ------------------------------------------------------------ inline search */
+
+.search-inline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--space-3);
+  animation: search-open 220ms var(--ease);
+}
+@keyframes search-open {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.search-input {
+  padding-right: calc(var(--space-4) + 1.6rem);
+  caret-color: var(--brand);
+}
+/* The browser's own clear button is a second, differently-styled X beside ours. */
+.search-input::-webkit-search-cancel-button { display: none; }
+
+.search-inline-icon {
+  position: absolute;
+  right: var(--space-4);
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+.search-inline-icon .icon { width: 1.35rem; height: 1.35rem; }
+
+.search-note {
+  margin-bottom: var(--space-3);
+  padding-inline: var(--space-1);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+.search-note:empty { display: none; }
+
+.link-btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--brand);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.list-head .section-title { margin-bottom: 0; }
+
+/*
+ * A ledger, not a stack of cards.
+ *
+ * Every row used to be its own white card with its own shadow and its own 16px
+ * radius. Twenty-four of those is not hierarchy, it is wallpaper: elevation that
+ * everything has says nothing about anything. One surface with hairlines between
+ * the rows says the same thing more quietly and lets the figures be the loudest
+ * part of the screen, which on a money app they should be.
+ */
+.group-rows {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+}
+/* :not(:first-child) rather than the obvious `* + *`: at equal specificity the
+   later rule wins, and `.row { border: 0 }` sits further down this file, so the
+   simple version produced a ledger with no dividers in it at all. */
+.group-rows > :not(:first-child) { border-top: 1px solid var(--line); }
+
+/*
+ * The month's transactions get a window of their own rather than running on down the
+ * page.
+ *
+ * It is sized so that when the page reaches the end of its own scroll, the section
+ * header sits at the top of the screen and the rows fill everything below it down to
+ * the Add button's band. Page scroll and list scroll then hand over at exactly that
+ * point rather than overlapping.
+ *
+ * How many rows that is depends on the phone - about ten on a 6.1 inch screen and a
+ * couple more on a taller one. A fixed row count was the other option and it is the
+ * wrong one: it leaves a gap of dead ground on one device and clips on another.
+ */
+.list-scroll {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100dvh - var(--nav-height) - var(--safe-bottom) - var(--space-4));
+}
+
+/* The header stays put once the list takes over the scrolling, so the list never
+   becomes a block of rows with nothing naming it. */
+.list-scroll .list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
+.list-scroll .group-rows {
+  flex: 1;
+  min-height: 0;
+  /*
+   * Locked shut until the page itself has nowhere left to go. Two scrollers sit one
+   * inside the other here and the browser hands a drag to the inner one every time,
+   * so an unlocked list would scroll its rows while the chart above was still on
+   * screen and the page had not moved at all. Unlocking it at the page's last pixel
+   * is what makes the two read as one gesture. app.js owns the toggle.
+   *
+   * Clipped rather than hidden overflow, so the row the window cuts through stays
+   * half visible and says there is more under it.
+   */
+  overflow-y: hidden;
+  /*
+   * Without this the inner scroller's overflow leaks into the DOCUMENT's scroll
+   * height: measured 1781px of page scroll for a 1456px page, so the reader could
+   * drag 325px past the end and the list would drift up under its own pinned
+   * header. overflow alone does not stop it and neither does overflow-x: hidden;
+   * paint containment does, because it is the thing that actually promises the
+   * browser nothing inside will be drawn outside.
+   */
+  contain: paint;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.list-scroll.is-scrollable .group-rows { overflow-y: auto; }
+
+/*
+ * The ledger's total line, sitting in the band the Add button floats in.
+ *
+ * padding-right, not a shorter width: the line is left aligned and the button owns
+ * the right corner, so the reserve belongs on the side the button is on. Nothing is
+ * centred here and nothing has to move when the button collapses.
+ */
+.ledger-foot {
+  display: flex;
+  gap: var(--space-6);
+  flex: none;
+  padding: var(--space-3) var(--fab-clear) 0 var(--space-1);
+}
+
+.ledger-foot-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ledger-foot-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.ledger-foot-value {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+
+.row, .cat-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  --row-gap-tight: var(--space-2);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease);
+}
+/* A row is the full width of its surface, so it cannot be pushed away from the
+   reader the way a free-standing button can. The press reads as the row lighting
+   up under the thumb instead. */
+.row:active, .cat-row:active { background: var(--surface-hover); }
+.row:hover, .cat-row:hover { background: var(--surface-hover); }
+.group-rows > :first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
+.group-rows > :last-child  { border-radius: 0 0 var(--r-card) var(--r-card); }
+.group-rows > :only-child  { border-radius: var(--r-card); }
+
+.row-date {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 34px;
+  line-height: 1.05;
+  color: var(--ink-3);
+}
+.row-date-mon {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+.row-date-day {
+  font-size: 1.25rem;
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.row-tile {
+  width: 40px;
+  height: 40px;
+  margin-left: calc(var(--space-3) * -1 + var(--row-gap-tight));
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-tile);
+  /*
+   * A tinted wash of the category hue rather than the hue itself, so a row of nine
+   * categories does not read as a row of nine buttons.
+   *
+   * These were briefly monochrome, on the argument that eight pastels compete with
+   * the two colours that carry meaning. Put back at the owner's request: the tiles
+   * are how the list is scanned, and the same hue identifies the category here and
+   * in the donut on Insights, which is worth more than the extra restraint. The
+   * amounts keep their sign, so direction still has a channel that is not colour.
+   */
+  background: color-mix(in srgb, var(--tile-hue) 12%, var(--surface));
+  color: var(--tile-hue);
+}
+.row-tile .icon { width: 1.35rem; height: 1.35rem; }
+
+.row-main, .cat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.row-end, .cat-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: none;
+  min-width: 0;
+}
+
+.row-title, .cat-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-sub {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.row-amount {
+  font-size: var(--text-row);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.cat-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+}
+
+/* ------------------------------------------------------------ empty states */
+
+.empty {
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+.empty-title { font-size: var(--text-row); font-weight: var(--weight-semibold); }
+.empty-body { font-size: var(--text-caption); color: var(--ink-3); max-width: 34ch; }
+.empty .btn { margin-top: var(--space-2); }
+
+/* ----------------------------------------------------------------- buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--tap-min);
+  padding: 0 var(--space-5);
+  border: 0;
+  border-radius: var(--r-pill);
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform var(--dur-instant) var(--ease), background var(--dur-state) var(--ease);
+}
+.btn:active { transform: scale(var(--press-scale)); }
+
+.btn-primary { background: var(--brand); color: var(--on-brand); }
+.btn-primary:hover { background: var(--brand-pressed); }
+.btn-primary:disabled { opacity: 0.45; pointer-events: none; }
+
+.btn-text { background: transparent; color: var(--brand); }
+.btn-text:hover { background: var(--brand-tint); }
+
+.btn-danger { background: var(--spend-tint); color: var(--spend); }
+
+.btn-block { width: 100%; }
+.btn-row { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2); }
+
+/* ------------------------------------------------------------------- chips */
+
+.chip-row {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+.chip-row::-webkit-scrollbar { display: none; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+  color: var(--on-sunken);
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  scroll-snap-align: start;
+  transition: background var(--dur-state) var(--ease), color var(--dur-state) var(--ease),
+              transform var(--dur-instant) var(--ease);
+}
+.chip:active { transform: scale(var(--press-scale)); }
+.chip.is-selected { background: var(--brand); color: var(--on-brand); }
+.chip .icon { width: 1.05rem; height: 1.05rem; }
+
+/* --------------------------------------------------------- segmented pills */
+
+.seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.seg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--tap-min);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-2);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), color var(--dur-state) var(--ease);
+}
+.seg-btn.is-selected { background: var(--brand); color: var(--on-brand); }
+
+/* ------------------------------------------------------------------ fields */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.input {
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--r-field);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font: inherit;
+}
+.input::placeholder { color: var(--ink-3); }
+.input:focus-visible { outline: 2px solid var(--brand); outline-offset: 0; }
+
+.field-money { position: relative; display: flex; align-items: center; }
+.field-prefix {
+  position: absolute;
+  left: var(--space-4);
+  color: var(--ink-3);
+  font-size: 1.25rem;
+  pointer-events: none;
+}
+.input-amount {
+  padding-left: calc(var(--space-4) + 1.4rem);
+  font-size: 1.5rem;
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em;
+}
+
+
+.field-hint { font-size: var(--text-caption); color: var(--ink-3); }
+.field-error { font-size: var(--text-caption); color: var(--spend); font-weight: var(--weight-medium); }
+
+/* A field error rendered by the template rather than toggled by [hidden]. */
+.field-error.is-shown { display: block; margin-top: calc(var(--space-2) * -1); }
+
+/* Two low-emphasis choices under a primary button: back out, or try again. */
+.sheet-actions-row { display: flex; justify-content: space-between; gap: var(--space-2); }
+
+/* ---------------------------------------------------------- detail sheet */
+
+.field-rows {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-field);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--tap-min);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+}
+.field-row + .field-row { border-top: 1px solid var(--line); }
+
+.field-row-label {
+  flex: none;
+  width: 92px;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.field-row-value {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.value-with-dot { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+/* The pencil is quiet until the row is touched. Five loud pencils would compete
+   with the values they are there to change. */
+.field-row-edit,
+.field-row-save {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), color var(--dur-state) var(--ease),
+              transform var(--dur-instant) var(--ease);
+}
+.field-row:hover .field-row-edit { color: var(--ink-2); background: var(--surface-hover); }
+.field-row-edit:active,
+.field-row-save:active { transform: scale(var(--press-scale)); }
+.field-row-edit .icon,
+.field-row-save .icon { width: 1.15rem; height: 1.15rem; }
+
+.field-row-save { background: var(--brand); color: var(--on-brand); }
+.field-row-save:hover { background: var(--brand-pressed); }
+
+.field-row.is-editing {
+  flex-wrap: wrap;
+  background: var(--surface);
+  padding-block: var(--space-3);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+.field-row-control { flex: 1; min-width: 0; }
+.field-row-control .input { min-height: 40px; }
+.field-row-control .input-amount { font-size: 1.25rem; }
+.field-row-control .chip-row,
+.field-row-control .seg { width: 100%; }
+.field-row.is-editing .field-row-label { width: 100%; margin-bottom: var(--space-2); }
+
+.field-row-actions { gap: var(--space-2); padding-right: var(--space-4); }
+
+/* A segmented control sits on the sunken group, so its unselected buttons need the
+   surface colour to read as buttons at all. On --surface-sunken they were invisible. */
+.field-row .seg-btn { background: var(--surface); }
+.field-row .seg-btn.is-selected { background: var(--brand); }
+.field-row-value.money { font-weight: var(--weight-semibold); }
+
+/* Sync state. Colour is never the only channel here: the value spells the state out
+   in words, and these only change its weight and hue. */
+.field-row-value.is-ok { color: var(--receive); }
+.field-row-value.is-warn { color: var(--warn); }
+
+/* An account id is a token to be read character by character, not a word. */
+.mono-id {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+.btn-sm { min-height: 40px; padding: 0 var(--space-4); font-size: var(--text-caption); }
+
+.note-under {
+  margin-top: var(--space-2);
+  padding-inline: var(--space-1);
+}
+
+.seg-3 { grid-template-columns: repeat(3, 1fr); }
+
+/* ---------------------------------------------------------------- calendar */
+
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.cal-month {
+  font-size: var(--text-row);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.cal-weekday {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-label);
+  color: var(--ink-3);
+}
+
+/*
+ * Square cells, sized by the grid rather than fixed, so the month fits any phone
+ * width without the last column falling off.
+ */
+.cal-cell {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), color var(--dur-state) var(--ease),
+              transform var(--dur-instant) var(--ease);
+}
+.cal-cell:hover:not(:disabled) { background: var(--surface-hover); }
+.cal-cell:active:not(:disabled) { transform: scale(var(--press-scale)); }
+
+/* Disabled, not hidden: a future day should read as a day you cannot use, not as a
+   hole in the month. */
+.cal-cell:disabled { color: var(--ink-3); opacity: 0.4; cursor: default; }
+.cal-cell.is-blank { pointer-events: none; }
+
+/* Today is outlined, the chosen day is filled, so both can be true at once and stay
+   readable. */
+.cal-cell.is-today { box-shadow: inset 0 0 0 1.5px var(--brand); color: var(--brand); font-weight: var(--weight-semibold); }
+.cal-cell.is-chosen {
+  background: var(--brand);
+  color: var(--on-brand);
+  font-weight: var(--weight-semibold);
+  box-shadow: none;
+}
+
+/* ------------------------------------------------------------------- sheet */
+
+.sheet {
+  width: 100%;
+  max-width: 560px;
+  margin: auto auto 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-card) var(--r-card) 0 0;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-raised);
+}
+.sheet::backdrop { background: rgba(8, 12, 20, 0.5); }
+
+.sheet[open] { animation: sheet-in var(--dur-sheet) var(--ease); }
+@keyframes sheet-in {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) calc(var(--space-6) + var(--safe-bottom));
+  max-height: 88dvh;
+  overflow-y: auto;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: calc(var(--space-3) * -1);
+}
+.sheet-title { font-size: var(--text-section); font-weight: var(--weight-bold); }
+
+.search-results { display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* -------------------------------------------------------------- walkthrough */
+
+/*
+ * Centred, and that is the one place in this app where centred is right: three
+ * screens with a mark, a line and a sentence are a single moment each, not a
+ * layout to scan. Everywhere else Spendo is left aligned because everywhere else
+ * the reader is comparing figures down a column.
+ */
+.intro {
+  align-items: center;
+  text-align: center;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+}
+
+.intro-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+.intro-mark .icon { width: 1.9rem; height: 1.9rem; }
+.intro-mark .icon-img { width: 1.9rem; height: 1.9rem; }
+
+.intro-title {
+  font-size: var(--text-section);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+}
+
+.intro-body {
+  font-size: var(--text-body);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 34ch;
+}
+
+/* Progress, not decoration: they say how many screens there are and which one this
+   is, which is the whole reason a reader tolerates an intro. */
+.intro-dots {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.intro-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+  transition: width var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+.intro-dot.is-on {
+  width: 20px;
+  background: var(--ink);
+}
+
+.intro-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+.intro-actions .intro-next { flex: 1; }
+
+/* --------------------------------------------------------------------- fab */
+
+.fab {
+  position: fixed;
+  right: max(var(--space-4), calc(50vw - 280px + var(--space-4)));
+  bottom: calc(var(--nav-height) + var(--safe-bottom) + var(--space-4));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 56px;
+  padding: 0 var(--space-5);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  color: var(--on-brand);
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  box-shadow: var(--shadow-fab);
+  cursor: pointer;
+  z-index: 20;
+  transition: transform var(--dur-instant) var(--ease),
+              padding var(--dur-state) var(--ease),
+              gap var(--dur-state) var(--ease);
+}
+.fab:active { transform: scale(var(--press-scale)); }
+
+/*
+ * The label goes as soon as the page moves and comes back at the top.
+ *
+ * Reading and adding are different moments: while the user is reading down the
+ * month the button only has to stay findable, and a word of it is covering a row.
+ * The mark alone still says what it does, and the button keeps its 56px target
+ * either way, so nothing is lost but the width.
+ *
+ * The width is not animated directly - auto does not interpolate. The label's own
+ * max-width and the button's padding are, and the width follows from them.
+ */
+.fab-label {
+  max-width: 5rem;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width var(--dur-state) var(--ease), opacity var(--dur-state) var(--ease);
+}
+.fab.is-compact { padding: 0 var(--space-4); gap: 0; }
+.fab.is-compact .fab-label { max-width: 0; opacity: 0; }
+/* display:inline-flex outranks the [hidden] attribute on equal specificity, so the
+   Settings screen would keep an Add button that adds nothing. */
+.fab[hidden] { display: none; }
+
+/* -------------------------------------------------------------------- nav */
+
+.nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: var(--safe-bottom);
+}
+
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: var(--nav-height);
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: color var(--dur-state) var(--ease);
+}
+.nav-item .icon { width: 1.4rem; height: 1.4rem; }
+
+.nav-item .nav-pill {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 30px;
+  border-radius: var(--r-pill);
+  transition: background var(--dur-state) var(--ease);
+}
+.nav-icon-on { display: none; }
+.nav-item.is-active .nav-icon-off { display: none; }
+.nav-item.is-active .nav-icon-on { display: block; }
+
+.nav-item.is-active { color: var(--brand); }
+.nav-item.is-active .nav-pill { background: var(--brand-tint); }
+
+/* ---------------------------------------------------------------- snackbar */
+
+/*
+ * Top, not bottom. At the bottom it landed on the Add button and the nav bar, which
+ * are the two things most likely to be tapped next, and its Undo sat under the
+ * thumb that had just pressed Save. Above the content it interrupts nothing.
+ */
+.snack {
+  position: fixed;
+  top: calc(var(--safe-top) + var(--space-3));
+  /* Centred with auto margins, not translateX(-50%). Sharing the transform property
+     between layout and animation meant the entry keyframe's offset could survive the
+     animation, leaving the bar 12px out of place. Layout owns position, the keyframe
+     owns transform. */
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: min(calc(100vw - var(--space-8)), 520px);
+  min-height: var(--tap-min);
+  padding: 0 var(--space-3) 0 var(--space-4);
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  color: var(--surface);
+  font-size: var(--text-caption);
+  box-shadow: var(--shadow-raised);
+}
+.snack[hidden] { display: none; }
+.snack-text { flex: 1; }
+.snack-action {
+  border: 0;
+  background: transparent;
+  color: var(--brand-on-dark);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+}
+
+/* Dark mode needs a visible edge on every raised surface: shadow alone does not
+   separate one dark grey from another. */
+@media (prefers-color-scheme: dark) {
+  /* The edge goes on the surface, not on every row inside it: a border per row
+     would draw a box round each line of the ledger and undo the whole point of
+     hairlines. .stat is gone with the three stat cards. */
+  :root:not([data-theme='light']) .card,
+  :root:not([data-theme='light']) .group-rows,
+  :root:not([data-theme='light']) .empty,
+  :root:not([data-theme='light']) .sheet,
+  :root:not([data-theme='light']) .nav { border: 1px solid var(--line); }
+  :root:not([data-theme='light']) .nav { border-width: 1px 0 0; }
+  :root:not([data-theme='light']) .snack { background: var(--surface-hover); color: var(--ink); }
+}
+:root[data-theme='dark'] .card,
+:root[data-theme='dark'] .group-rows,
+:root[data-theme='dark'] .empty,
+:root[data-theme='dark'] .sheet { border: 1px solid var(--line); }
+:root[data-theme='dark'] .snack { background: var(--surface-hover); color: var(--ink); }
+
+
+/* ------------------------------------------------------------------ motion */
+
+/*
+ * MOTION_INTENSITY 4. Every animation below answers one of three questions and
+ * nothing animates for decoration:
+ *
+ *   is this a new screen?      the entry stagger, on navigation only
+ *   how big is this number?    the bars growing from their baseline
+ *   did my tap land?           the sheet, the snackbar, the press scales
+ *
+ * The stagger is deliberately NOT run when a row is saved or deleted. Re-animating
+ * a whole list because one row changed reads as the app restarting.
+ */
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.view.is-entering > * {
+  animation: rise 340ms var(--ease) backwards;
+}
+.view.is-entering > *:nth-child(1) { animation-delay: 0ms; }
+.view.is-entering > *:nth-child(2) { animation-delay: 40ms; }
+.view.is-entering > *:nth-child(3) { animation-delay: 80ms; }
+.view.is-entering > *:nth-child(4) { animation-delay: 120ms; }
+.view.is-entering > *:nth-child(n+5) { animation-delay: 150ms; }
+
+/* Rows carry the stagger one level deeper, capped so a long list does not turn into
+   a slow cascade the reader has to sit through. */
+.view.is-entering .group-rows > *:nth-child(1) { animation: rise 300ms var(--ease) 170ms backwards; }
+.view.is-entering .group-rows > *:nth-child(2) { animation: rise 300ms var(--ease) 205ms backwards; }
+.view.is-entering .group-rows > *:nth-child(3) { animation: rise 300ms var(--ease) 240ms backwards; }
+.view.is-entering .group-rows > *:nth-child(4) { animation: rise 300ms var(--ease) 270ms backwards; }
+.view.is-entering .group-rows > *:nth-child(n+5) { animation: rise 300ms var(--ease) 295ms backwards; }
+
+/* The bars grow out of the baseline they are measured from, which is the one place
+   in the app where motion carries meaning rather than polish: it shows the reader
+   which direction the magnitude is read in. */
+@keyframes bars-grow {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+.chart-bars {
+  transform-box: view-box;
+  transform-origin: 0 96px;
+  animation: bars-grow 520ms var(--ease) backwards;
+}
+
+/* The donut draws itself round once on entry, in the direction it is read. */
+@keyframes donut-sweep {
+  from { clip-path: polygon(50% 50%, 50% 0, 50% 0); }
+  to   { clip-path: polygon(50% 50%, 50% 0, 150% -50%, 150% 150%, -50% 150%, -50% -50%, 50% 0); }
+}
+.view.is-entering .chart-donut { animation: donut-sweep 640ms var(--ease); }
+
+/* A newly saved row lights up briefly so the eye can find it in a list it did not
+   have to re-read. */
+@keyframes row-flash {
+  from { background: var(--brand-tint); }
+  to   { background: var(--surface); }
+}
+.row.is-new { animation: row-flash 900ms var(--ease); }
+
+.sheet::backdrop { animation: fade-in var(--dur-sheet) var(--ease); }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/*
+ * The snackbar has no entry animation, and that is a decision rather than an
+ * omission.
+ *
+ * It goes from display:none to shown, and a CSS animation started on that
+ * transition can be created but never committed to a rendering frame: playState
+ * reads "running" while startTime stays null and currentTime never leaves 0. The
+ * element then sits at its first keyframe for good. Measured here: with a transform
+ * keyframe it stranded 12px out of place, and with an opacity keyframe it stranded
+ * fully transparent, which is a bar that reports what just happened by being
+ * invisible.
+ *
+ * Position and visibility are not negotiable for this component; 200ms of fade is.
+ * So the base style is the resting state and nothing animates it.
+ */
+
+.fab { animation: rise 300ms var(--ease) backwards; }
+
+/* The nav pill grows behind the active icon rather than appearing under it. */
+.nav-item .nav-pill { transform: scale(0.9); }
+.nav-item.is-active .nav-pill { transform: scale(1); }
+.nav-item .nav-pill { transition: background var(--dur-state) var(--ease), transform var(--dur-state) var(--ease); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Everything above collapses. The page still arrives, it just arrives at once. */
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+  .nav-item .nav-pill { transform: none; }
+}

@@ -1,0 +1,472 @@
+# Spendo
+
+A personal expense tracker that runs as an installable PWA on the phone. It replaces an
+existing n8n + Telegram + Google Sheets workflow with a real app.
+
+Postgres is the source of truth. The same Google Spreadsheet the n8n workflow wrote to is
+kept as a mirror, and Google Calendar events per expense are kept, but both are now written
+by this app's own server. Once Spendo works, the n8n workflow is switched off entirely.
+
+---
+
+## Status
+
+**Phase 1 done.** The app runs, offline, with no build step and no network request. Add an
+expense or an income, see the month's balance, a daily-spend chart against the even-spread
+budget, three stat tiles, the transaction list, a per-entry detail sheet where every field
+edits in place, a category breakdown, a month history, search, opening money, theme, and a
+JSON backup export. Everything is in `localStorage`; nothing has left the device yet.
+
+Verified in a browser at 400x860: all four tabs, the add sheet in both directions, save,
+delete with undo, each field of the detail sheet edited and read back from storage, light and
+dark, and `scrollWidth` measured against `clientWidth` after every layout change. Defects found and fixed during those passes, two of which
+are worth keeping in mind because they will recur:
+
+- **`display` in a class rule outranks the `[hidden]` attribute on equal specificity.** Any
+  element toggled with `.hidden = true` needs its own `[hidden] { display: none }` rule. It
+  bit the chart tooltip and the floating Add button, both of which stayed visible.
+- **A grid item's width floors at its min-content.** `.app` had an implicit `auto` column, so
+  one nowrap row widened the column, widened `.view` with it, and scrolled the whole page
+  sideways. Fixed with `grid-template-columns: minmax(0, 1fr)`. Measure `scrollWidth` against
+  `clientWidth` after any layout change rather than judging it from a screenshot.
+- **A CSS animation on an element going from `display: none` to shown can be created and
+  never started.** `playState` reads "running" while `startTime` stays null and `currentTime`
+  never leaves 0, so the element sits at its first keyframe permanently. It stranded the
+  snackbar 12px out of place with a transform keyframe, then fully transparent with an
+  opacity one. Do not let an entry animation own a property that has to be correct: make the
+  base style the resting state, and treat the animation as the thing that can be lost.
+- **An SVG arc that ends where it starts is degenerate.** The single-category donut drew a
+  full circle as one arc from a point back to itself, and the browser rendered two overlapping
+  discs instead of a ring. A circle in a path is always two half-arcs, split at opposite
+  sides, so each arc has real endpoints. Test charts with one data point, not only with a
+  realistic spread: the whole-of-one case is where geometry breaks.
+- **Dark mode is declared twice and both copies must be kept in step.** `tokens.css` has a
+  `@media (prefers-color-scheme: dark)` block and a `:root[data-theme='dark']` block, because
+  the manual toggle has to beat the OS in both directions. A token added to only one of them
+  works on a system-dark phone and silently fails for anyone who picked dark by hand. The
+  hero surface shipped that way for one build. After editing either block, count the token in
+  the file: it should appear three times, once per block.
+- **A cache-first service worker makes every fix look like it did not work.** Three separate
+  changes during phase 1 were reported as not working when the code was already correct and
+  the browser was running the previous build. Fixed at the root by switching `sw.js` to
+  network-first rather than by remembering to clear caches.
+- **An inner scroller's overflow can leak into the document's scroll height.** The windowed
+  transaction list made the page report 1781px of scroll for a 1456px page, so the reader
+  could drag 325px past the end and the list drifted up under its own pinned header. Neither
+  `overflow-y: hidden` nor `overflow-x: hidden` stops it. `contain: paint` does. Compare
+  `documentElement.scrollHeight` against `body.scrollHeight` when scrolling goes further than
+  the layout should allow; they should be equal.
+- **A hex that looks neutral is not neutral. Read the channels.** The ink ramp was picked as
+  `#15181a` / `#4a4f52` / `#676d70`, all of which have BLUE as their highest channel: a cool
+  grey ramp on the warm ground that had just been chosen to replace a cool one. It undid the
+  whole point of the palette work and was invisible until the computed values were printed.
+- **Contrast must be measured on every ground a colour lands on.** Captions sit on `--bg` as
+  often as on `--surface`. `#6a7069` clears 5.1:1 on white and 4.48:1 on the ground, so it
+  passes a white-only check and fails the real one.
+- **A `border` on the element beats a `border-top` from its container at equal specificity.**
+  `.group-rows > * + *` lost to `.row { border: 0 }` because `.row` sits later in the file, so
+  the ledger shipped with no dividers at all. `:not(:first-child)` raises specificity and
+  wins. Dark mode had the mirror of this: the edge belongs on the surface, not on every row
+  inside it, or each line gets a box drawn round it.
+- **A field that salvages a number is worse than one that refuses.** The amount input is
+  `type="text"` (deliberately: `type=number` brings a spinner and a browser error bubble),
+  and the submit handler used to run `parseFloat(value.replace(/[^0-9.]/g, ''))`. Typing
+  `8979erte` therefore saved 8979 - a figure the user never entered. Fixed in two places:
+  the field filters as you type, and the submit check uses `Number()` on the whole string so
+  junk is NaN rather than a salvaged prefix. Stripping input at validation time is always
+  this bug in disguise.
+- **Watch the leading dot when cleaning a numeric paste.** Stripping non-digits from
+  "Rs. 1,299.994" leaves ".1299.994", whose first dot is the one from "Rs.", so a
+  twelve-hundred rupee expense read as .12. Leading dots are dropped before the decimal
+  point is chosen.
+- **A validation error belongs to the state of a field, not to the last submit.** "Say what
+  it was for." sat under a description that already had text in it, because errors were only
+  cleared by the next submit. They now clear on `input` for the field they name.
+- **One unreadable record must not fail the whole sync batch.** `POST /api/sync` used to
+  throw on the first record it could not parse, so a single malformed row - left by an old
+  client or a hand-edited store - meant the device could never sync anything again and its
+  pending count only went up. Records are now rejected individually and reported back in
+  `rejected`. Found against the real database, not in review.
+- **`if (!record.updatedAt)` treats epoch 0 as missing.** It is a real timestamp and a falsy
+  number. Combined with the above it was what wedged a device. Timestamp checks use
+  `Number.isFinite(v) && v >= 0`.
+- **A rejected record must not drive the sync scheduler.** It stays dirty forever by design,
+  so counting it as work-to-do made the write-triggered sync schedule a sync for the sync that
+  just finished, in a loop. `sendableCount()` excludes anything the server has already
+  refused.
+- **A library module must never `process.exit()` at import time.** `db.js` exited when
+  `DATABASE_URL` was unset, so importing `sync.js` to test its validator killed the test
+  runner before a single assertion ran. The check moved to `assertConfigured()`, called by
+  `index.js` and `migrate.js`.
+- **`pg` parses a `date` column into a local-time `Date`.** A row stored as 2026-08-31 comes
+  back as 2026-08-30T18:30:00Z in IST and reads as the 30th. `db.js` registers a type parser
+  that keeps `date` as the string it went in as.
+- **Data arriving from the server does not repaint anything on its own.** The app repainted
+  after each local action, so nothing was subscribed to the store. The first sync pulled a
+  month of entries down and the screen went on showing an empty list until the user changed
+  tab, which reads as the sync having done nothing. `sync.onRemoteChange` now fires only when
+  a round actually delivered records, and app.js repaints on it - deliberately narrower than
+  the status listener, which ticks several times a minute and would restart entry animations.
+- **`--` inside a `/* */` SQL comment breaks some parsers.** It is legal Postgres, and it
+  made pg-mem swallow the rest of `schema.sql` and report "relation does not exist" for every
+  table. The section dividers in that file are line comments now. Worth avoiding in any SQL a
+  migration runner or GUI client might also read.
+- **`node --test test/` fails on Windows**, resolving the directory as a module before
+  running anything. The `test` script uses the glob `"test/*.test.js"`, which the runner
+  expands itself on every platform.
+- **Nested scrollers: the browser always gives the drag to the inner one.** Home now has a
+  windowed transaction list inside the scrolling page. Left to itself the list scrolled its
+  rows while the chart above was still on screen and the page had not moved, which is not
+  what anyone means by "scroll down". The fix is to keep the inner container
+  `overflow-y: hidden` and only unlock it once `scrollY + innerHeight >= scrollHeight`, so
+  the two hand over instead of competing. Chaining back outwards is left at the default -
+  `overscroll-behavior: contain` would trap the reader at the top of the list.
+- **A state read from scroll position must be re-read after the layout settles.** The same
+  unlock was computed inside `render()`, which runs before focusing the search field scrolls
+  the page. Opening search at the bottom of the page left the list locked shut with nowhere
+  else to scroll. `render()` now calls the sync a second time on the next frame.
+- **New markup needs its attribute registered in the delegated click listener.** One document
+  listener handles every control, matching a fixed list of `data-` attributes. The edit
+  pencils were added to the markup and did nothing until `[data-edit-field]` and its
+  siblings were added to that selector. If a new control does nothing, check that list first.
+
+### The ink pass (2026-08-31)
+
+The app was rebuilt off its brand hue after the owner said the green read flat. What was
+actually flat was not the hex: it was a fully saturated mid-green used as a large flat fill
+against a stock blue-grey ground. Two structural things were doing more damage than the
+colour and both are gone:
+
+- every transaction row was its own elevated white card, twenty-four of them
+- the three equal white stat tiles, which is a named anti-pattern
+
+`--brand` is now ink: buttons, FAB, section marks and chart bars are near-black, and the
+ground is a warm neutral rather than the stock blue-grey slate.
+
+Two changes from this pass were **rewound at the owner's request** and should not be
+reintroduced without asking:
+
+- **Category hues on the row tiles.** They were made monochrome and put back. The tiles are
+  how the list is scanned and the hue ties a row to its slice in the donut. Signed amounts
+  stay, so direction still has a channel that is not colour.
+- **The expenses-only hero.** A second hero mode reported total spending when a month had no
+  opening figure and no income, because the balance card otherwise prints negative spending
+  against a pot of zero (`Balance left -1,901`, `1,955 of 54 used`). The single balance card
+  is back and opening money is again a step the user is expected to take. The defect is real
+  and still there; it is a known, accepted state, not an oversight.
+
+Kept from the pass: the ink palette, the ledger, the figures strip, signed amounts, and the
+walkthrough. Credits was removed from Settings at the owner's request after the Flaticon
+attribution requirement was raised; the obligation now lives in `NOTICE.md`, which is not a
+substitute for in-product attribution under that licence and says so.
+
+Next: phase 2, the server and sync.
+
+### Known gaps
+
+- **Icons are SVG only.** `icons/icon.svg` is referenced for every manifest size. Chrome on
+  Android installs from it, but a PNG set (192, 512, and a maskable 512) is the safer route
+  and should be generated before this is treated as installed software.
+- **No tests.** Phase 1 was verified by driving a browser, which is fine for one pass and is
+  not a regression net.
+- **Search has no date operators yet.** Keywords and the amount operators (`>500`, `<200`,
+  `100-500`, an exact number) work now; `d:21`, `21-06-2025` and `m:2025-05` arrive with the
+  rest of search in phase 5.
+
+---
+
+## Where this came from
+
+The predecessor is an n8n workflow, `ExpenseTracker - Auto Create Spreadsheet + Sheets`,
+driven from a Telegram bot with six commands: `/start`, `/exp`, `/transactions`, `/undo`,
+`/search`, `/help`, plus a scheduled month-close job.
+
+It works, but it has structural problems that motivated the rewrite:
+
+- Balance is a stored column, so a backdated expense or an undo forces a rewrite of every
+  row in the sheet. Three separate code nodes exist only to do that rewriting.
+- The month-close job is named "Every 28th", its sticky note says the 28th, and its code
+  checks `dayOfMonth !== 30`. It therefore never runs in February.
+- `/start` on an existing month adds to the opening balance while the help text says it
+  sets it.
+- Four near-identical "check month sheet" code nodes each read only the last row of the
+  registry tab to decide whether the current month exists.
+- The undo date parser guesses between `YYYY-MM-DD` and `YYYY-DD-MM` and picks wrong for
+  days 1 to 12.
+
+Spendo's data model removes the first class of bug by construction, and the rest are simply
+not reimplemented.
+
+---
+
+## Decisions (locked 2026-08-31)
+
+| Decision | Choice | Reasoning |
+|---|---|---|
+| Platform | PWA now, native later | No native capability is required for text and number entry. A native wrapper can come later against the same server API, if home-screen widgets or Android SMS bank-alert parsing turn out to be worth it. |
+| Skeleton | Copied from `../daily_attendance_tracker` (Track8) | Working, deployed, offline-first PWA with auth, sync, push and Postgres already solved. |
+| Build step | None | Inherited from Track8. Plain HTML, CSS and ES modules served as files. |
+| External requests | None at runtime | No CDN fonts, no analytics, no remote icons. Everything is served from our own origin so the app works fully offline. |
+| Source of truth | Postgres (Neon free tier) | An interactive UI cannot wait 1 to 3 seconds on the Google Sheets API for every tap. |
+| Google Sheets | Mirror, written by our server | The spreadsheet view is still wanted. Mirror writes are best-effort and queued, never blocking a user action. |
+| Google Calendar | Kept, written by our server | One event per expense, deleted when the expense is deleted. |
+| Google auth | Service account | Share the spreadsheet and the calendar with the service account address. Avoids an OAuth refresh-token dance for a single-user app. |
+| n8n | Retired once Spendo works | |
+| Telegram bot | Retired with it | |
+
+---
+
+## Architecture
+
+Built so far, and what is still to come:
+
+```
+spendo/
+  index.html            app shell, with the icon sprite inlined
+  styles/
+    tokens.css          design tokens, light and dark
+    app.css             component and screen styles
+  js/
+    format.js           dates and money, one format in, one format out
+    categories.js       the fixed category list and its colour slots
+    store.js            local-first writes, returns immediately
+    charts.js           inline SVG, no chart library
+    ui.js               rendering, returns HTML strings, holds no state
+    app.js              screen logic and events
+    sync.js             phase 2: background push and pull
+    push.js             phase 4: web push subscription
+    xlsx.js             phase 5: spreadsheet export
+  sw.js                 service worker, offline shell
+  manifest.webmanifest
+  fonts/
+    geist-latin-variable.woff2   self-hosted, latin subset, variable weight
+  icons/
+    icon.svg            app icon
+    sprite.svg          Phosphor symbols, vendored, inlined into index.html
+  server/               phases 2 to 4
+    index.js            serves the app and the API on one origin
+    db.js               Postgres, row-level security
+    auth.js             email plus 6-digit code, session cookie
+    mail.js             Brevo HTTP API (Render blocks SMTP ports)
+    sync.js             /api/sync
+    sheets.js           Google Sheets mirror, queued and retried
+    calendar.js         Google Calendar events
+    close.js            month-close job
+  docs/
+    ui-spec.md          design system and screen specifications
+  tools/
+    serve.py            development server, sends no-store
+    build-preview.py    flattens the app into one file
+```
+
+The app and the API share one origin on purpose: a push subscription belongs to the origin
+that registered the service worker.
+
+---
+
+## Data model
+
+```sql
+accounts, sessions, login_codes    -- copied from Track8 unchanged
+
+months (
+  account_id, ym, opening_amount, sheet_name, closed_at
+)
+
+expenses (
+  id, account_id, ym, txn_date, entered_at,
+  amount, description, category,
+  calendar_event_id, deleted_at, dirty
+)
+```
+
+The tables as built are in `server/src/schema.sql`, which is the authoritative version of
+the sketch above. Two things there that are not obvious:
+
+- **`change_seq`, a database-wide sequence, is the pull cursor.** Not a timestamp. A device
+  whose clock is a few seconds fast writes a row stamped in the future, the next pull asks
+  for changes after a cursor that has already passed it, and that row is never sent again.
+- **The key on `expenses` is `(account_id, id)`, not `id`.** Ids are generated on the device
+  and are only unique within it, so two accounts are entitled to collide.
+
+**Balance is computed, never stored:**
+
+```
+balance = opening_amount - running_sum(amount ORDER BY txn_date, id)
+```
+
+This single choice is what removes the n8n workflow's worst behaviour. A backdated expense
+inserts one row, and every balance downstream of it is correct on the next read. There is
+nothing to rewrite, so there is no rewrite to get wrong.
+
+Deletes are soft (`deleted_at`), which makes undo trivial and keeps the Calendar event id
+around long enough to delete the event.
+
+---
+
+## Feature map from the n8n workflow
+
+| n8n | Spendo |
+|---|---|
+| `/start <amount>` | Settings, opening money. Set and Add are separate explicit actions, since the bot silently added while claiming to set. |
+| `/exp <amount> <desc>` | Add screen. Date defaults to today, date picker to backdate. One code path, not two mirrored branches. |
+| `/transactions` | Home, grouped by date, running balance. |
+| `/undo` | Long-press or swipe to delete any row, not only the last one or a description substring match. |
+| `/search <query>` | Search screen. Same operators kept: `>500`, `<200`, `100-500`, `d:21`, `21-06-2025`, `21-06-2025..25-06-2025`, `m:2025-05`. |
+| Calendar event per expense | Same, written server-side. |
+| Month close, 28th or 30th | Server job on the real last day of the month. |
+| `/help` | Not needed. It is a user interface. |
+| (none) | Categories. New, and the reason an Insights screen can exist at all. |
+
+---
+
+## Phases
+
+1. **Scaffold and offline core.** Copy the skeleton, strip attendance, build add, list and
+   delete working fully offline on the phone. Usable at the end of this phase.
+2. **Server and sync.** Done. Postgres schema, one `/api/sync` endpoint, offline-first
+   client with a dirty-set outbox.
+2b. **Email sign-in.** Done. A six-digit code by Brevo, an httpOnly session cookie, and
+   sync gated on being signed in.
+3. **Google mirror.** Service account, Sheets append and rebuild, Calendar events.
+4. **Month close.** Scheduled job, summary rows, report push notification.
+5. **Search, xlsx export, polish.** Then switch the n8n workflow off.
+
+---
+
+## External setup required from the user
+
+None of this blocks phase 1.
+
+- Neon Postgres connection string, the pooled one, ending in `?sslmode=require`.
+- Google Cloud project, a service account, its JSON key. The spreadsheet id and the
+  calendar address are personal identifiers and are NOT in this repository - they live in
+  `server/.env` as `SHEET_ID` and `CALENDAR_ID` when phase 3 lands. Share the spreadsheet
+  with the service account address, and share the calendar with it granting "Make changes
+  to events".
+- Render web service plus environment variables, and a cron pinging `/healthz` every 10
+  minutes, because the free tier idles a service after about 15 minutes and an idle service
+  cannot send a notification on time.
+- A Brevo API key and a verified sender address, in `server/.env` as `BREVO_API_KEY` and
+  `MAIL_FROM_EMAIL`. The same Brevo account as Track8; the free tier's 300 emails a day is
+  shared between them, which sign-in codes come nowhere near. Without a key the code is
+  printed to the server console instead, which is enough to test the whole flow.
+
+---
+
+## Running it
+
+### With the server and a database (phase 2 onwards)
+
+```
+cd server
+npm install
+# put your connection string in server/.env:  DATABASE_URL=postgres://...
+npm run migrate          # applies src/schema.sql, safe to re-run
+npm start                # serves the API and the app on http://localhost:8123
+```
+
+The server serves the PWA as well as `/api`, on one origin. That is deliberate: the app is
+built on the rule that no runtime request leaves our own origin, and an API on a second host
+would break it, bring CORS with it, and add a preflight to every sync.
+
+`npm test` runs the sync suite against an in-memory Postgres. It runs the real `schema.sql`
+and the real upsert SQL, so it catches a broken conflict clause; it does not replace running
+once against your actual database.
+
+`node test/fake-server.js` is a stand-in that speaks the same two endpoints from memory, for
+working on the client without a database attached.
+
+### Client only, no database
+
+Still works, and the app is fully usable this way - sync simply reports that it cannot reach
+a server.
+
+```
+python tools/serve.py             # then open http://localhost:8123
+```
+
+Use that rather than `python -m http.server`. The built-in server sends no cache headers at
+all, so the browser applies heuristic freshness and keeps serving an edited ES module from
+memory. `tools/serve.py` sends `no-store`, so a reload is always a reload.
+
+**This used to require unregistering the service worker after every change.** It no longer
+does: `sw.js` was cache-first with a background refresh, which serves the previous version's
+JavaScript on every load and only catches up on the load after that. It is now network-first
+with the cache as the fallback, registered with `updateViaCache: 'none'`, and the page
+reloads itself once when a new worker takes over. Online, one reload is enough. Offline is
+unchanged, because the cache still answers the moment the network does not.
+
+Open it from a phone on the same network by using the machine's LAN address instead of
+localhost. A service worker needs a secure context, so it registers on localhost and over
+HTTPS but not over a plain LAN IP; everything else still works there.
+
+`python tools/build-preview.py` flattens the app into `dist/spendo-preview.html`, one file
+that can be opened or hosted anywhere. It is a preview only, always generated, never edited:
+the multi-file source is the app.
+
+**When editing during development, remember the service worker serves the cached shell
+first.** A changed file will not appear until the `CACHE` constant in `sw.js` is bumped, or
+the worker is unregistered and its caches cleared.
+
+## Signing in, and why sync waits for it
+
+An account exists only after someone proves they can read mail at an address. There is no
+password and no signup step: the first correct code for an address creates the account.
+
+**What this replaced, and why.** The first version of phase 2 had the phone mint a UUID and
+`POST /api/register` adopt it. That endpoint had to accept anyone, because the id was a claim
+with nothing behind it - measured, not assumed: three strangers each got a 201, a working
+token, and rows in Neon without proving anything. It also meant a person's spending reached
+the database before they had agreed to any of it. `/api/register` is gone.
+
+**Signed out is a supported state, not a degraded one.** The whole app works with no account:
+localStorage is the working copy, and syncing is what you opt into. Deferring it costs
+nothing structurally, because the outbox does not care how long it waits - everything written
+while signed out stays `dirty`, and the first sync after signing in drains all of it. That was
+verified end to end: a transaction recorded signed-out went up on sign-in with no dirty
+records left behind.
+
+**The session is an httpOnly cookie**, so nothing on the page can read it - including an
+injected script. Same-origin `fetch` sends it on its own, so no code carries a token around.
+The consequence is that the page cannot tell whether it is signed in without asking, so
+`js/identity.js` caches the ANSWER in localStorage for an offline boot and calls `/api/me`
+before the first sync. That cache is a display convenience and never an authorisation; a 401
+is how it finds out it was wrong.
+
+**Signing in as a different address wipes the ledger first.** A record carries no owner
+locally - the session decides who owns what - so without this, one person's spending would be
+pushed into the next person's account on the same phone. Theme and "has seen the walkthrough"
+survive, because they belong to the phone rather than to whoever is signed in on it. Signing
+OUT deletes nothing.
+
+**The rate limits are not decoration.** Sending is free to the caller and costs a quota
+against a verified sender, so it is capped per address (60s cooldown, 5/hour, kept in the
+table so a restart does not reset it) and per source IP (20/hour, in memory). One live code
+per address, replaced on each send: two valid codes at once doubles the guess surface and
+quietly turns "3 attempts" into six.
+
+**Every rejection reads identically.** "Never asked", "expired", "used up" and "wrong" all
+return the same sentence, so nothing can be learned by probing. The code is compared with
+`timingSafeEqual` for the same reason.
+
+**`schema.sql` and `migrations.sql` are two files on purpose.** `create table if not exists`
+does nothing to a table that already exists, so a column added to a definition after the
+first deploy reaches a fresh database only. `migrations.sql` is where it reaches a live one.
+The test suite loads schema.sql alone, because a fresh database already has the final shape -
+and because pg-mem cannot parse several of the alter statements.
+
+---
+
+## Conventions
+
+- No build step. If a change needs a bundler, it is the wrong change.
+- No runtime request leaves our origin. Fonts, icons and everything else are served locally.
+- Every write is local first and returns immediately. Sync is background, and is skipped
+  entirely when there is nothing to sync to.
+- Money is stored in rupees as `numeric(12,2)`. Never a float.
+- Dates in the UI and in the sheet mirror are `DD-MM-YYYY`. Dates in Postgres are `date`.
+  Conversion happens at the boundary, once, in one place.
+- Design tokens live in `styles/tokens.css` and nowhere else. No hard-coded colour in a
+  component.
+- The design system is specified in `docs/ui-spec.md`. Read it before writing any UI.

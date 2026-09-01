@@ -1,0 +1,16 @@
+# Credentials. server/.env holds the Neon connection string AND the Brevo API
+# key; either one in a commit is a credential leak that survives being deleted,
+# because git keeps the history. The example file is the one that is tracked.
+.env
+.env.*
+!.env.example
+
+# Render runs `npm install` at build time.
+node_modules/
+npm-debug.log*
+
+# Local scratch
+*.local
+*.log
+.DS_Store
+Thumbs.db

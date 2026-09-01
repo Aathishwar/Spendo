@@ -1,0 +1,364 @@
+/**
+ * Spendo - design tokens
+ *
+ * Every colour, radius, type step and duration in the app comes from this file.
+ * A component that hard-codes a colour is a bug.
+ *
+ * Light is the base. Dark redefines only the values that change, so a token added
+ * to :root without a dark counterpart still renders, just not optimally - which is
+ * a visible mistake rather than a silent one.
+ *
+ * Contrast ratios in the comments are measured against the surface the token is
+ * actually used on, not against pure white, and every text token clears WCAG AA.
+ */
+
+/*
+ * Geist and Geist Mono, SIL Open Font Licence, latin subset, variable weight.
+ * Vendored from @fontsource-variable so the app still makes no external request.
+ * swap, not block: a first paint in the fallback stack beats a blank screen.
+ */
+@font-face {
+  font-family: 'Geist';
+  src: url('../fonts/geist-latin-variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+
+  /* ------------------------------------------------------------------ brand */
+
+  /*
+   * There is no brand hue. That is the design, not an omission.
+   *
+   * This app has exactly one thing worth colouring: which way the money went. Every
+   * screen is a column of figures, and if the buttons, the tiles, the nav and the
+   * chart all carry a hue too, then red and green stop being a signal and become
+   * two more colours among many. So the interface is ink on paper, and the only
+   * hues on a Home screen are --spend, --receive, and the category series inside
+   * the charts.
+   *
+   * It replaced a deep teal (#00695c, Material's Teal 800) used as a flat fill
+   * across the balance card. That read as a slab, and as every other finance app.
+   */
+  --brand:            #1b1f1c;   /* 16.7:1 on --surface. Buttons, FAB, marks, bars */
+  --brand-pressed:    #080a09;
+  --brand-tint:       #e9ebe8;   /* selected chip fill, icon tiles, nav pill */
+  --brand-tint-line:  #d3d7d1;
+  --on-brand:         #ffffff;
+  /* The accent as it must appear ON a near-black surface: the snackbar and the
+     chart tooltip are near-black in both themes, so the ink accent would be
+     invisible on them. */
+  --brand-on-dark:    #eceeea;
+
+  /* The hero surface: the balance card, and nothing else in the app. Near-black
+     rather than a mid-tone fill, so the one figure printed on it carries the weight
+     of the screen. White sits on it at 17.7:1. Never pure #000: a true black has no
+     depth and reads as a hole rather than as a surface. */
+  --hero:             #171a18;
+  --hero-edge:        #0c0e0d;   /* the far end of the card's gradient */
+  --on-hero:          #ffffff;      /* 17.5:1 on --hero */
+  --on-hero-dim:      rgba(255, 255, 255, 0.72);
+  --on-hero-track:    rgba(255, 255, 255, 0.20);
+
+  /* --------------------------------------------------------------- surfaces */
+
+  /* The ground was #f3f5f8, which is the stock blue-grey slate every framework
+     ships. A neutral should be chosen, not inherited: this one is pulled very
+     slightly warm and green so it reads as paper rather than as screen. --surface
+     stays pure white because the categorical chart palette is validated against
+     that exact value. */
+  --bg:               #f0f1ef;   /* the page behind the cards */
+  --surface:          #ffffff;   /* cards, sheets, the ledger */
+  --surface-sunken:   #e9ebe7;   /* filled inputs, unselected chips, icon tiles */
+  --surface-hover:    #e1e4df;
+  --line:             #e2e5e0;   /* hairlines: now doing the work shadows used to */
+  --line-strong:      #c9cdc6;   /* focus-adjacent outlines */
+
+  /* ------------------------------------------------------------------- ink */
+
+  /*
+   * Measured on BOTH grounds, because captions sit on --bg as often as on --surface
+   * and a value that only clears white is half checked.
+   *
+   * Green is the highest channel in every one of these, matching the ground. The
+   * first attempt at this ramp was #15181a / #4a4f52 / #676d70, which all have BLUE
+   * as their highest channel: a cool grey ramp on a warm ground, which is the exact
+   * mismatch the ground was re-picked to fix. Check the channels, do not trust that
+   * a hex looks neutral.
+   */
+  --ink:              #161a17;   /* 17.6:1 white, 15.5:1 bg - titles, amounts */
+  --ink-2:            #4c524c;   /*  8.0:1 white,  7.1:1 bg - body, secondary */
+  --ink-3:            #686e67;   /*  5.2:1 white,  4.6:1 bg - captions, labels */
+  --on-sunken:        #161a17;
+
+  /* -------------------------------------------------------------- semantic */
+
+  /* Signed money only. These two never colour a button, an icon or a heading -
+     if red appears in Spendo, money left; if green appears, money arrived. */
+  --spend:            #b42318;   /* 6.6:1 */
+  --spend-tint:       #fef3f2;
+  --receive:          #146c34;   /* 6.5:1 white, 5.8:1 bg - matched in weight to --spend */
+  --receive-tint:     #ecfdf3;
+  --warn:             #b54708;
+  --warn-tint:        #fffaeb;
+
+  /* ------------------------------------------------------------------ type */
+
+  /* Geist, self-hosted, latin subset, variable weight: 29KB for the whole family
+     and no request leaves our origin. The system stack was the honest starting
+     point but it gave the app no voice of its own, and on a screen that is mostly
+     numbers the numerals are the voice.
+
+     Money uses the same face with tabular figures switched on, not a monospace
+     one. Geist's tnum makes every digit the same width, which is all a column of
+     amounts needs; a true monospace also gives the comma a full cell, so a balance
+     renders as "7 , 303" at display size. Measured: 1111 and 0000 both set to 96px
+     at 40px with tabular-nums, so alignment is real and not assumed. */
+  --font: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --text-hero:        2.75rem;   /* 44px - the balance, and nothing else */
+  --text-display:     2.125rem;  /* 34px - a screen's leading number */
+  --text-title:       1.75rem;   /* 28px - screen title */
+  --text-section:     1.25rem;   /* 20px - section heading */
+  --text-row:         1rem;      /* 16px - list row title */
+  --text-body:        0.9375rem; /* 15px */
+  --text-caption:     0.8125rem; /* 13px - category, date, helper */
+  --text-label:       0.75rem;   /* 12px - uppercase field label */
+
+  --weight-regular:   400;
+  --weight-medium:    500;
+  --weight-semibold:  600;
+  --weight-bold:      700;
+
+  --track-label:      0.08em;    /* uppercase field labels only */
+  --track-tight:      -0.03em;   /* display sizes, where Geist sets loose by default */
+
+  /* ---------------------------------------------------------------- shape */
+
+  /* Three radii, and which one to use is decided by what the thing is, not by
+     how it looks in isolation:
+       - anything you tap that is shaped like a word  -> --r-pill
+       - anything that holds content                  -> --r-card
+       - anything you type into, and icon tiles       -> --r-field
+     Mixing beyond this rule is broken, not expressive. */
+  --r-pill:           999px;     /* buttons, chips, segmented controls, FAB */
+  --r-card:           16px;      /* cards, sheets, list rows */
+  --r-field:          12px;      /* inputs, selects, icon tiles */
+  --r-tile:           10px;      /* the small icon square inside a row */
+
+  /* ------------------------------------------------------------- elevation */
+
+  /*
+   * Tinted to the ground, never pure black on a light surface.
+   *
+   * There used to be a --shadow-row, and every one of a month's transactions wore
+   * it. Twenty-four elevated cards is not hierarchy, it is texture: if everything
+   * is lifted then nothing is. Rows are now separated by --line inside one surface,
+   * and elevation is spent only where it means something - the balance card leads,
+   * a card groups, a sheet covers.
+   */
+  --shadow-card:      0 1px 2px rgba(22, 26, 23, 0.04), 0 1px 3px rgba(22, 26, 23, 0.05);
+  --shadow-hero:      0 2px 6px rgba(12, 14, 13, 0.16), 0 14px 30px rgba(12, 14, 13, 0.20);
+  --shadow-raised:    0 4px 8px rgba(22, 26, 23, 0.06), 0 12px 24px rgba(22, 26, 23, 0.08);
+  --shadow-fab:       0 6px 16px rgba(12, 14, 13, 0.28);
+
+  /* --------------------------------------------------------------- spacing */
+
+  --space-1: 0.25rem;  /*  4px */
+  --space-2: 0.5rem;   /*  8px */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.25rem;  /* 20px */
+  --space-6: 1.5rem;   /* 24px */
+  --space-8: 2rem;     /* 32px */
+
+  /* Thumbs, not cursors. Nothing tappable is smaller than this. */
+  --tap-min: 48px;
+
+  /* ---------------------------------------------------------------- motion */
+
+  /* MOTION_INTENSITY 4. Motion here acknowledges a tap and moves a sheet. It
+     does not decorate. Every value below collapses under reduced motion. */
+  --ease:             cubic-bezier(0.2, 0, 0, 1);   /* M3 emphasised-decelerate */
+  --ease-exit:        cubic-bezier(0.3, 0, 0.8, 0.15);
+  --dur-instant:      90ms;    /* press feedback */
+  --dur-state:        180ms;   /* chip select, tab change, colour change */
+  --dur-sheet:        280ms;   /* bottom sheet in, screen transition */
+  --press-scale:      0.97;
+
+
+  /* ------------------------------------------------------- chart categories */
+
+  /* Eight fixed categorical slots, assigned in order and never cycled. A ninth
+     category folds into --series-other, it does not get a generated hue.
+     Validated with the dataviz validator against --surface in both modes:
+     lightness band, chroma floor, CVD separation and normal-vision floor all
+     pass. Three of the light slots sit under 3:1 against white, which is why
+     every category is always printed with its name and amount beside the mark. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: #98a2b3;
+
+  /* The gap punched between adjacent segments of a stacked bar, so two fills
+     never touch and read as one. */
+  --series-gap: var(--surface);
+
+  /* ------------------------------------------------------------------ misc */
+
+  --watermark: rgba(16, 24, 40, 0.022);
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-height: 64px;
+
+  /*
+   * How far the Add button reaches in from the right, plus air. The band it floats
+   * in used to be reserved vertically - 84px of empty ground with a 56px button in
+   * one corner of it - and is now the ledger's total line, so the clearance it needs
+   * is horizontal instead. Sized for the button's EXPANDED width (about 101px), not
+   * its collapsed 56px, because a list short enough not to scroll leaves the label
+   * showing while the total line is on screen.
+   */
+  --fab-clear: 118px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    /* The ink accent inverts rather than lightening a hue: near-black on paper
+       becomes near-white on ink. 14.3:1 on --surface. */
+    --brand:            #e6e8e4;
+    --brand-pressed:    #f4f6f2;
+    --brand-tint:       #262a27;
+    --brand-tint-line:  #363b37;
+    --on-brand:         #161a17;
+
+    --bg:               #0c0e0d;
+    --surface:          #161a18;
+    --surface-sunken:   #1e2320;
+    --surface-hover:    #282e2a;
+    --line:             #272d29;
+    --line-strong:      #39413c;
+
+    --ink:              #e9ece8;
+    --ink-2:            #a8b0aa;
+    --ink-3:            #868e88;
+    --on-sunken:        #e9ece8;
+
+    --spend:            #ff9584;
+    --spend-tint:       #2a1512;
+    --receive:          #6ee787;
+    --receive-tint:     #0d2a1d;
+    --warn:             #f5b544;
+    --warn-tint:        #2a1f0d;
+
+    /* Depth in dark mode comes from surface lightness, not from a heavier
+       shadow, which would be invisible anyway. */
+    --shadow-card:      0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-raised:    0 8px 24px rgba(0, 0, 0, 0.5);
+    --shadow-fab:       0 6px 16px rgba(0, 0, 0, 0.5);
+    --watermark:        rgba(255, 255, 255, 0.022);
+
+    /* A raised near-black, not the pale accent: at night the balance card should
+       sit above the page, not be a slab of light on it. */
+    --hero:             #1c2220;
+    --hero-edge:        #121614;
+    --on-hero:          #eef1ed;
+    --on-hero-dim:      rgba(238, 241, 237, 0.74);
+    --on-hero-track:    rgba(238, 241, 237, 0.18);
+    --shadow-hero:      0 10px 28px rgba(0, 0, 0, 0.45);
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #7e8b9c;
+  }
+}
+
+/* The manual toggle has to win in both directions, so dark is declared a second
+   time rather than relying on the media query alone. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --brand:            #e6e8e4;
+  --brand-pressed:    #f4f6f2;
+  --brand-tint:       #262a27;
+  --brand-tint-line:  #363b37;
+  --on-brand:         #161a17;
+
+  --bg:               #0c0e0d;
+  --surface:          #161a18;
+  --surface-sunken:   #1e2320;
+  --surface-hover:    #282e2a;
+  --line:             #272d29;
+  --line-strong:      #39413c;
+
+  --ink:              #e9ece8;
+  --ink-2:            #a8b0aa;
+  --ink-3:            #868e88;
+  --on-sunken:        #e9ece8;
+
+  --spend:            #ff9584;
+  --spend-tint:       #2a1512;
+  --receive:          #6ee787;
+  --receive-tint:     #0d2a1d;
+  --warn:             #f5b544;
+  --warn-tint:        #2a1f0d;
+
+  --shadow-card:      0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-raised:    0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-fab:       0 6px 16px rgba(0, 0, 0, 0.5);
+  --watermark:        rgba(255, 255, 255, 0.022);
+
+  --hero:             #1c2220;
+  --hero-edge:        #121614;
+  --on-hero:          #eef1ed;
+  --on-hero-dim:      rgba(238, 241, 237, 0.74);
+  --on-hero-track:    rgba(238, 241, 237, 0.18);
+  --shadow-hero:      0 10px 28px rgba(0, 0, 0, 0.45);
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-other: #7e8b9c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 1ms;
+    --dur-state:   1ms;
+    --dur-sheet:   1ms;
+    --press-scale: 1;
+  }
+}
+
+/* Money is the reason this app exists, so every figure is tabular: columns of
+   amounts line up, and a balance does not shift sideways as it counts. */
+/*
+ * Every figure in the app. Tabular figures so amounts line up in a column and a
+ * counting balance does not shuffle sideways, in the same face as everything else.
+ */
+.money {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
