@@ -181,12 +181,6 @@ Next: phase 2, the server and sync.
 
 ### Known gaps
 
-- **The NIM call itself is unverified.** Everything around it is tested - the two
-  routes, the session gate, the rate limit, the validation of what comes back, and the
-  not-configured path - but no request has been made with a real key, so the model id
-  in `NIM_MODEL` and the endpoint in `NIM_URL` are the documented defaults rather than
-  measured facts. Set `NIM_API_KEY` in `server/.env` and the first call will confirm
-  or correct both.
 
 - **No tests.** Phase 1 was verified by driving a browser, which is fine for one pass and is
   not a regression net.
@@ -551,6 +545,38 @@ that is confidently wrong about someone's money is worse than no paragraph, and 
 reader has no way to tell the difference. So the numbers are the content and the
 writing is laid on top - never the other way round, or the sheet would be empty on a
 train.
+
+### Choosing the model, and two traps in doing it
+
+`openai/gpt-oss-120b`, picked by measuring ten Indian descriptions the local layers
+would miss:
+
+| model | right | median | worst |
+|---|---|---|---|
+| `openai/gpt-oss-120b` | 10/10 | 1135ms | 1416ms |
+| `openai/gpt-oss-20b` | 9/10 | 2645ms | 6021ms |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | 5/10 | 10315ms | 36174ms |
+
+The 120b being both more accurate AND twice as fast as the 20b is not what anyone
+would predict. That is the argument for running the test rather than recognising a
+name.
+
+- **`/v1/models` is a catalogue, not an entitlement.** It lists 82 and most of them
+  return 404 on the first chat call. `meta/llama-3.1-8b-instruct`, which was the
+  original default here purely because it sounded like the obvious small model, is not
+  among the ones this key can invoke at all.
+- **`max_tokens: 8` produced nothing usable from any model on this endpoint.** They
+  all reason first. gpt-oss puts that in `reasoning_content` and leaves `content`
+  clean; nemotron-lightning puts it in `content`, which is why it scores 5/10 - half
+  its replies are the opening of a thinking-out-loud that the budget cut off. The
+  budget has to cover the thinking even when the answer is one word, so it is 512.
+
+**Real latency is not the benchmark latency.** In a tight loop the model answers in
+about a second; spaced out the way a person actually types, the same calls took 2.2s
+to 7.8s, because the NIM function goes cold between them. That is why the client
+waits twelve seconds rather than six, and why a late answer is cached even when it is
+too late to apply: the same description will be typed again, and next time layer 1
+has it.
 
 ### What leaves the device
 

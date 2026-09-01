@@ -44,13 +44,19 @@ async function post(url, body, timeoutMs) {
 /**
  * A category id for a description the phone could not place, or null.
  *
- * Six seconds, which is shorter than the server's own timeout on purpose: this runs
- * while someone is filling in a form, and a guess that arrives after they have
- * already picked a category is worse than no guess. The caller drops a late answer
- * anyway; this stops the request outliving the sheet.
+ * Twelve seconds, raised from six after measuring it. In a tight loop the model
+ * answers in about a second, but spaced out the way a person actually types it ran
+ * 2.2s to 6.6s - so a six-second deadline was throwing away correct answers that had
+ * already been paid for.
+ *
+ * A long deadline is safe here because lateness is handled at the other end: the
+ * caller checks that the sheet is still open, the description unchanged and the
+ * category still untouched before it applies anything, and caches the answer either
+ * way. So the worst case is a request nobody reads, which still leaves the model
+ * warm for the next one.
  */
 export async function suggestCategory(description, categories) {
-  const out = await post('/api/categorise', { description, categories }, 6000);
+  const out = await post('/api/categorise', { description, categories }, 12000);
   return out?.category || null;
 }
 

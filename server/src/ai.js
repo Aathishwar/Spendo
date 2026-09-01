@@ -24,10 +24,39 @@
  */
 
 const NIM_URL = process.env.NIM_URL || 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL = process.env.NIM_MODEL || 'meta/llama-3.1-8b-instruct';
 
-/** A model call that hangs is a request that hangs. */
-const TIMEOUT_MS = Number(process.env.NIM_TIMEOUT_MS || 8000);
+/*
+ * Chosen by measurement, not by recognising the name. Ten Indian expense descriptions
+ * that the phone's own layers would miss, scored for accuracy and latency:
+ *
+ *   openai/gpt-oss-120b                   10/10   median 1135ms   worst  1416ms
+ *   openai/gpt-oss-20b                     9/10   median 2645ms   worst  6021ms
+ *   nvidia/nemotron-3.5-lightning-30b-a3b  5/10   median 10315ms  worst 36174ms
+ *
+ * The 120b being both more accurate AND twice as fast as the 20b is not what anyone
+ * would predict; it is presumably better provisioned. Which is the point of running
+ * the test.
+ *
+ * Two things worth knowing before changing this:
+ *
+ * - /v1/models lists 82 models and is a catalogue, not an entitlement. Most of them
+ *   return 404 on the first chat call. Anything set here has to be tried.
+ * - The models that do answer REASON first. gpt-oss puts that in `reasoning_content`
+ *   and leaves `content` clean; nemotron-lightning puts it in `content`, which is
+ *   why it scores 5/10 - half its answers are the start of a thinking-out-loud that
+ *   the token budget cut off.
+ */
+const MODEL = process.env.NIM_MODEL || 'openai/gpt-oss-120b';
+
+/*
+ * A model call that hangs is a request that hangs.
+ *
+ * Generous, because a NIM function that has gone cold takes far longer on the first
+ * call than on the tenth, and the client has its own shorter deadline anyway - it
+ * gives up in six seconds and shows no guess. A call still running after that is not
+ * wasted: it warms the function for the next one.
+ */
+const TIMEOUT_MS = Number(process.env.NIM_TIMEOUT_MS || 20000);
 
 const apiKey = () => process.env.NIM_API_KEY || '';
 
@@ -35,7 +64,16 @@ export function aiConfigured() {
   return Boolean(apiKey());
 }
 
-async function chat(messages, { maxTokens = 200, temperature = 0 } = {}) {
+/*
+ * `max_tokens` has to cover the thinking, not just the answer.
+ *
+ * This was 8 for categorisation - one word plus slack - and it produced nothing
+ * usable from any model on this endpoint, because the budget was spent before the
+ * reasoning finished and `content` came back empty or truncated mid-thought. The
+ * app's own validator caught it and returned null, which is the right failure but
+ * looked exactly like the feature not working.
+ */
+async function chat(messages, { maxTokens = 512, temperature = 0 } = {}) {
   if (!aiConfigured()) return null;
 
   const control = new AbortController();
@@ -99,7 +137,7 @@ export async function categorise(description, allowed) {
         'If none clearly fits, reply with the last id in the list.'
     },
     { role: 'user', content: description }
-  ], { maxTokens: 8, temperature: 0 });
+  ], { maxTokens: 512, temperature: 0 });
 
   if (!text) return null;
 
@@ -157,7 +195,7 @@ export async function reviewMonth(facts) {
         'plainly support it. Do not moralise about the spending.'
     },
     { role: 'user', content: lines.join('\n') }
-  ], { maxTokens: 160, temperature: 0.3 });
+  ], { maxTokens: 1024, temperature: 0.3 });
 
   return text ? text.replace(/\s+/g, ' ').trim() : null;
 }

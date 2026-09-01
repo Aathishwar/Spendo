@@ -300,6 +300,20 @@ function guessCategory() {
   if (!form) return;
   const description = form.elements.description.value.trim();
 
+  /*
+   * The note describes the LAST guess, so it has to go the moment the description it
+   * described is no longer what is in the field.
+   *
+   * Without this it lags: type something new, and "Picked from your past entries"
+   * sits under a category that was chosen for words you have since deleted. The chip
+   * itself stays - there is nothing better to put there until a new guess lands - but
+   * a label that is actively wrong about where it came from is worse than none.
+   */
+  if (draft.picked && draft.pickedFor !== description) {
+    draft.picked = null;
+    form.querySelector('.field-label-row .field-hint')?.remove();
+  }
+
   // Below three characters there is nothing to go on, and a chip flickering between
   // categories on every keystroke reads as a fault.
   if (description.length < 3) return;
@@ -315,16 +329,25 @@ async function askServer(description) {
   const ids = categoriesFor(draft ? draft.direction : 'out').map((c) => c.id);
 
   const found = await ai.suggestCategory(description, ids);
+  if (!found) return;
 
-  // A late answer is dropped. The sheet may have been closed, the direction changed,
-  // or the description typed further - and a category appearing under someone who has
-  // moved on is exactly the behaviour that makes people distrust the feature.
-  if (!found || seq !== guessSeq || !draft || draft.categoryTouched) return;
+  /*
+   * Cached BEFORE the staleness checks, deliberately.
+   *
+   * An answer that arrives too late to use is still a correct answer that has been
+   * paid for, and the same description will be typed again. Caching it here turns a
+   * call that missed its moment into a permanent local hit: next time, layer 1
+   * answers it in under a millisecond with no network at all.
+   */
+  remember(description, found);
+
+  // A late answer is not APPLIED. The sheet may have been closed, the direction
+  // changed, or the description typed further - and a category appearing under
+  // someone who has moved on is the behaviour that makes people distrust this.
+  if (seq !== guessSeq || !draft || draft.categoryTouched) return;
   const form = document.getElementById('add-form');
   if (!form || form.elements.description.value.trim() !== description) return;
 
-  // Cached locally so this description never has to be sent again.
-  remember(description, found);
   applyGuess(found, 'ai', description);
 }
 
