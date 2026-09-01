@@ -217,6 +217,31 @@ function openAdd(direction = 'out') {
   openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
 }
 
+/**
+ * Show only the recent descriptions that still match what has been typed.
+ *
+ * Done by toggling `hidden` on chips that are already in the DOM, never by
+ * re-rendering the sheet: re-rendering replaces the input, which drops focus and
+ * closes the keyboard on the second character of every word.
+ */
+function filterSuggestions(form) {
+  const wrap = form.querySelector('[data-suggest]');
+  if (!wrap) return;
+
+  const typed = form.elements.description.value.trim().toLowerCase();
+  let any = false;
+
+  for (const chip of wrap.querySelectorAll('[data-suggest-value]')) {
+    const value = chip.dataset.suggestValue.toLowerCase();
+    // An exact match is hidden too: offering to fill in what is already there is a
+    // control that does nothing.
+    const show = !typed || (value.includes(typed) && value !== typed);
+    chip.hidden = !show;
+    any = any || show;
+  }
+  wrap.hidden = !any;
+}
+
 /** Reads the sheet's current inputs so a direction or category tap does not wipe them. */
 function captureDraft() {
   const form = document.getElementById('add-form');
@@ -629,9 +654,25 @@ document.addEventListener('click', (e) => {
     '[data-action]', '[data-tab]', '[data-entry]', '[data-month]',
     '[data-direction]', '[data-category]', '[data-theme]',
     '[data-slice]', '[data-edit-field]', '[data-set-category]',
-    '[data-set-direction]', '[data-pick-day]', '[data-set-day]', '[data-cal-step]'
+    '[data-set-direction]', '[data-pick-day]', '[data-set-day]', '[data-cal-step]',
+    '[data-suggest-value]'
   ].join(', '));
   if (!el) return;
+
+  // A recent description, tapped. Fills the field and hands focus back, so the next
+  // thing typed continues in the sheet rather than nowhere.
+  if (el.dataset.suggestValue !== undefined) {
+    const form = el.closest('form');
+    if (form) {
+      form.elements.description.value = el.dataset.suggestValue;
+      if (draft) draft.description = el.dataset.suggestValue;
+      const slot = form.querySelector('[data-error="description"]');
+      if (slot) slot.hidden = true;
+      filterSuggestions(form);
+      form.elements.description.focus();
+    }
+    return;
+  }
 
   // Tabs
   if (el.dataset.tab) {
@@ -829,6 +870,8 @@ document.addEventListener('input', (e) => {
   }
 
   if (el.name === 'amount') filterAmountInput(el);
+
+  if (el.name === 'description' && el.form) filterSuggestions(el.form);
 
   // A sign-in code is six digits. An autofilled SMS or a pasted "code: 123456" both
   // arrive with characters around them, and none of them belong in the field.

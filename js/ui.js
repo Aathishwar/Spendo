@@ -744,6 +744,38 @@ function dateField(dateISO) {
 
 /* ------------------------------------------------------------------ sheets */
 
+/*
+ * Recent descriptions, as tappable chips rather than a <datalist>.
+ *
+ * The datalist never opened on Android. It is the standard answer on a desktop and
+ * close to useless on a phone: its popup has to compete with the on-screen keyboard,
+ * Safari has never supported it on iOS at all, and inside a <dialog> - which every
+ * sheet in this app is - Chrome frequently does not render it. A control whose entire
+ * job is to be discoverable cannot be one that has to be guessed at.
+ *
+ * These are visible without tapping anything, are thumb-sized, and work everywhere.
+ * `hidden` is set here rather than the list being re-rendered as the user types,
+ * because re-rendering the sheet would take the focus - and with it the keyboard -
+ * away mid-word.
+ */
+function suggestRow(suggestions, current) {
+  const list = suggestions || [];
+  if (!list.length) return '';
+
+  const typed = String(current || '').trim().toLowerCase();
+  const shown = (s) => !typed || (s.toLowerCase().includes(typed) && s.toLowerCase() !== typed);
+
+  return `
+    <div class="suggest" data-suggest ${list.some(shown) ? '' : 'hidden'}>
+      <span class="suggest-label">Recent</span>
+      <div class="chip-row">
+        ${list.map((s) => `
+          <button type="button" class="chip chip-sm" data-suggest-value="${esc(s)}"
+            ${shown(s) ? '' : 'hidden'}>${esc(s)}</button>`).join('')}
+      </div>
+    </div>`;
+}
+
 export function addSheet({ direction, category: catId, date, amount, description, suggestions }) {
   const cats = categoriesFor(direction);
   const chosen = catId || cats[0].id;
@@ -775,12 +807,10 @@ export function addSheet({ direction, category: catId, date, amount, description
       <label class="field">
         <span class="field-label">Description</span>
         <input class="input" name="description" type="text" autocomplete="off"
-          list="recent-descriptions" placeholder="What was it for" value="${esc(description || '')}" required>
-        <datalist id="recent-descriptions">
-          ${(suggestions || []).map((s) => `<option value="${esc(s)}"></option>`).join('')}
-        </datalist>
+          placeholder="What was it for" value="${esc(description || '')}" required>
         <span class="field-error" data-error="description" hidden></span>
       </label>
+      ${suggestRow(suggestions, description)}
 
       <div class="field">
         <span class="field-label">Category</span>

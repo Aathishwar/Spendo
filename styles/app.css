@@ -869,6 +869,50 @@ button { font: inherit; color: inherit; }
 .chip.is-selected { background: var(--brand); color: var(--on-brand); }
 .chip .icon { width: 1.05rem; height: 1.05rem; }
 
+/*
+ * Recent descriptions under the description field.
+ *
+ * Pulled up tight against the input with a negative margin so it reads as belonging
+ * to that field rather than as a section of its own; the sheet's own gap would
+ * otherwise put it the same distance from the input as Category is.
+ */
+.suggest {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: calc(var(--space-3) * -1);
+  min-width: 0;
+}
+.suggest-label {
+  flex: none;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  color: var(--ink-3);
+}
+.suggest .chip-row { min-width: 0; }
+
+/*
+ * Secondary to a category chip, but not smaller to the thumb.
+ *
+ * These were 34px, which is under every touch-target guideline and worse than the
+ * number suggests: they live in a horizontal scroller, where the gesture for
+ * scrolling and the gesture for tapping start identically. The hierarchy is carried
+ * by the caption type and the missing icon instead of by height.
+ *
+ * Long descriptions are truncated rather than allowed to set the chip's width; the
+ * full text is still what gets filled in.
+ */
+.chip-sm {
+  height: 40px;
+  line-height: 40px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-caption);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
 /* --------------------------------------------------------- segmented pills */
 
 .seg {

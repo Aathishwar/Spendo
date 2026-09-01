@@ -125,6 +125,17 @@ are worth keeping in mind because they will recur:
   unlock was computed inside `render()`, which runs before focusing the search field scrolls
   the page. Opening search at the bottom of the page left the list locked shut with nowhere
   else to scroll. `render()` now calls the sync a second time on the next frame.
+- **`<datalist>` is a desktop control.** The description field offered recent entries
+  through one, and on the phone it never opened - which is the whole feature, since a
+  suggestion nobody can see is not a suggestion. Three separate reasons, any one of which is
+  enough: its popup competes with the on-screen keyboard, Safari on iOS has never supported
+  it, and inside a `<dialog>` - which every sheet in this app is - Chrome often does not
+  render it at all. Replaced with chips that are visible without tapping anything. The
+  general rule: a control whose only job is discoverability must not itself have to be
+  discovered.
+- **Filter a suggestion list by toggling `hidden`, never by re-rendering.** Re-rendering the
+  sheet replaces the input, which drops focus and closes the keyboard on the second character
+  of every word.
 - **New markup needs its attribute registered in the delegated click listener.** One document
   listener handles every control, matching a fixed list of `data-` attributes. The edit
   pencils were added to the markup and did nothing until `[data-edit-field]` and its
