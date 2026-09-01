@@ -18,6 +18,7 @@ import {
   attachAccount, requireAccount, requestCode, verifyCode, me, logout
 } from './auth.js';
 import { mailConfigured } from './mail.js';
+import { aiConfigured, categorise, reviewMonth } from './ai.js';
 import { sync } from './sync.js';
 
 assertConfigured();
@@ -34,6 +35,13 @@ app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 // Every request learns who it is from; only some require it.
 app.use(attachAccount);
+
+if (!aiConfigured()) {
+  console.warn(
+    '[spendo] NIM_API_KEY is not set - the category guess falls back to the phone\'s\n' +
+    '         own history and keyword table, and month write-ups are figures only.'
+  );
+}
 
 if (!mailConfigured()) {
   console.warn(
@@ -87,6 +95,121 @@ app.get('/api/me', me);
 // and syncing is what you opt into. So this 401 is not a failure the client has to
 // recover from, it is the answer to "should I be syncing".
 app.post('/api/sync', requireAccount, sync);
+
+/* ---------------------------------------------------------------------- ai */
+
+/*
+ * A crude per-account cap, in memory.
+ *
+ * The point is not billing, it is that a signed-in session is a credential someone
+ * could script: without this, one account can empty the quota for the app. It resets
+ * on deploy, which is fine - the limit that protects a person is the one on their own
+ * account, and losing it briefly costs a few calls.
+ */
+const AI_LIMIT = Number(process.env.AI_CALLS_PER_HOUR || 200);
+const aiHits = new Map();
+
+function aiAllowed(accountId) {
+  const now = Date.now();
+  const hits = (aiHits.get(accountId) || []).filter((t) => now - t < 60 * 60 * 1000);
+  if (hits.length >= AI_LIMIT) {
+    aiHits.set(accountId, hits);
+    return false;
+  }
+  hits.push(now);
+  aiHits.set(accountId, hits);
+  if (aiHits.size > 5000) aiHits.clear();
+  return true;
+}
+
+/*
+ * The list the model is allowed to answer from lives on the CLIENT and is sent with
+ * the request, because the client is what renders the chips. A server-side copy would
+ * be a second list to keep in step, and the day they drift the model starts returning
+ * a category the app cannot display.
+ *
+ * It is still validated here: ids are bounded in length and count, so a caller cannot
+ * use this route to send an essay to the model on our key.
+ */
+const cleanIds = (raw) => (Array.isArray(raw) ? raw : [])
+  .filter((v) => typeof v === 'string' && /^[a-z][a-z0-9_-]{0,23}$/.test(v))
+  .slice(0, 24);
+
+app.post('/api/categorise', requireAccount, async (req, res, next) => {
+  try {
+    const description = String(req.body?.description || '').trim().slice(0, 200);
+    const allowed = cleanIds(req.body?.categories);
+
+    if (!description || allowed.length < 2) {
+      res.json({ category: null, reason: 'nothing to work with' });
+      return;
+    }
+    if (!aiConfigured()) {
+      res.json({ category: null, reason: 'not configured' });
+      return;
+    }
+    if (!aiAllowed(req.account.id)) {
+      res.status(429).json({ category: null, reason: 'too many requests' });
+      return;
+    }
+
+    res.json({ category: await categorise(description, allowed), source: 'ai' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/*
+ * The write-up for a month.
+ *
+ * The FIGURES arrive from the device already computed - this route never touches the
+ * ledger and never adds anything up. That is what makes the result trustworthy: the
+ * numbers on the screen and the numbers in the sentence come from the same place, so
+ * they cannot disagree.
+ */
+app.post('/api/review', requireAccount, async (req, res, next) => {
+  try {
+    const f = req.body?.facts;
+    if (!f || typeof f !== 'object' || typeof f.ym !== 'string') {
+      res.status(400).json({ error: 'facts are required' });
+      return;
+    }
+    if (!aiConfigured()) {
+      res.json({ text: null, reason: 'not configured' });
+      return;
+    }
+    if (!aiAllowed(req.account.id)) {
+      res.status(429).json({ text: null, reason: 'too many requests' });
+      return;
+    }
+
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    // Rebuilt field by field rather than passed through. Whatever else the body
+    // carries does not reach the model.
+    const facts = {
+      ym: f.ym.slice(0, 7),
+      isCurrent: Boolean(f.isCurrent),
+      spent: num(f.spent),
+      received: num(f.received),
+      opening: num(f.opening),
+      balance: num(f.balance),
+      count: num(f.count),
+      activeDays: num(f.activeDays),
+      daysInMonth: num(f.daysInMonth),
+      biggestAmount: num(f.biggestAmount),
+      top: (Array.isArray(f.top) ? f.top : []).slice(0, 4).map((t) => ({
+        label: String(t?.label || '').slice(0, 24),
+        amount: num(t?.amount),
+        share: num(t?.share)
+      })),
+      prev: f.prev ? { spent: num(f.prev.spent), delta: num(f.prev.delta) } : null
+    };
+
+    res.json({ text: await reviewMonth(facts) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Anything else under /api is a typo, not a page. Say so, rather than letting the
 // static handler below answer it with index.html and the client parse HTML as JSON.

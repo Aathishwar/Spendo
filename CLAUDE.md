@@ -175,6 +175,13 @@ Next: phase 2, the server and sync.
 
 ### Known gaps
 
+- **The NIM call itself is unverified.** Everything around it is tested - the two
+  routes, the session gate, the rate limit, the validation of what comes back, and the
+  not-configured path - but no request has been made with a real key, so the model id
+  in `NIM_MODEL` and the endpoint in `NIM_URL` are the documented defaults rather than
+  measured facts. Set `NIM_API_KEY` in `server/.env` and the first call will confirm
+  or correct both.
+
 - **No tests.** Phase 1 was verified by driving a browser, which is fine for one pass and is
   not a regression net.
 - **Search has no date operators yet.** Keywords and the amount operators (`>500`, `<200`,
@@ -467,6 +474,83 @@ does nothing to a table that already exists, so a column added to a definition a
 first deploy reaches a fresh database only. `migrations.sql` is where it reaches a live one.
 The test suite loads schema.sql alone, because a fresh database already has the final shape -
 and because pg-mem cannot parse several of the alter statements.
+
+---
+
+## Where the model is used, and where it deliberately is not
+
+Two features, both optional, both degrading to something useful when the key is
+missing, the phone is offline, or nobody is signed in.
+
+### Guessing the category: three layers, and the model is the last one
+
+```
+1  your own history     exact match, then a vote across shared words   0ms, offline
+2  a keyword table      the cold start, before there is any history    0ms, offline
+3  the server, and NIM  only when 1 and 2 both miss                    ~700ms, online
+```
+
+**The ordering is the design, not an optimisation.** A model is the obvious first
+reach and the wrong one: it costs a round trip on the hottest path in the app, it
+does nothing with no signal, and it does not know that your "MRF" is a tyre shop.
+Your own history does, because after a few weeks most descriptions repeat. Measured
+against a seeded history of five descriptions, layers 1 and 2 answered 11 of 12 test
+cases correctly with no network at all - including "petrol bunk near office" from
+having once typed "Petrol", and "Swiggy dinner" from a word list.
+
+Layer 3's answer is cached into layer 1 (`localStorage['spendo.aiCategories']`), so
+any one description is only ever sent once. That cache is deliberately NOT in the
+synced store: it can be rebuilt from nothing, and syncing it would push it to every
+other device for no gain.
+
+**`draft.categoryTouched` is the safety rule.** One tap on a category chip and no
+guess may move it again for that entry. An assistant that keeps overruling a decision
+you have already made is worse than one that never helps.
+
+Two more rules that are easy to get wrong:
+
+- **Never re-render the sheet to show a guess.** Re-rendering replaces the description
+  input, which drops focus and closes the keyboard mid-word. The chip's class is
+  toggled in place instead - the same trap the suggestion chips avoid.
+- **Drop a late answer.** The request carries a sequence number and the description it
+  was made for; if either has moved on, the reply is discarded. A category appearing
+  under someone who has already moved past that field is exactly the behaviour that
+  makes people stop trusting the feature.
+
+### Writing up a month
+
+Opened by tapping a month in History. Tapping one used to silently change which month
+Home was showing and drop you there to notice - an action with no visible cause. It
+now opens a sheet, which is the pattern a transaction row already uses, and the jump
+is a button that says what it does.
+
+**Every figure on that sheet is computed on the device.** The model is handed those
+figures and asked only to phrase them; it is never asked what a number is. A paragraph
+that is confidently wrong about someone's money is worse than no paragraph, and the
+reader has no way to tell the difference. So the numbers are the content and the
+writing is laid on top - never the other way round, or the sheet would be empty on a
+train.
+
+### What leaves the device
+
+| Route | Sent | Never sent |
+|---|---|---|
+| `/api/categorise` | the description text, the list of category ids | amount, date, history, anything else |
+| `/api/review` | totals, category shares and labels, last month's total | any description, any date, any individual transaction |
+
+The `/api/review` body is rebuilt field by field on the server rather than passed
+through, so whatever else a caller puts in it does not reach the model. Both routes
+require a session and are capped per account per hour: a signed-in session is a
+credential someone could script, and without the cap one account can empty the quota
+for the app.
+
+### Not used for
+
+- **"Unusual spend" alerts.** That is a median and a multiplier - deterministic,
+  instant, free, and never wrong in a way the reader cannot check. Spending a model
+  call on arithmetic is how a feature becomes both slower and less trustworthy.
+- **A chat assistant.** The dataset is eight columns and a few hundred rows; anything
+  a chat could answer, Insights answers faster and cannot be confidently wrong about.
 
 ---
 

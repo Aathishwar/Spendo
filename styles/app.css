@@ -983,6 +983,24 @@ button { font: inherit; color: inherit; }
 
 
 .field-hint { font-size: var(--text-caption); color: var(--ink-3); }
+
+/* A label with a note pushed to the far end of the same line. */
+.field-label-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+
+/*
+ * The written month summary.
+ *
+ * Set larger and looser than a card note, because it is prose to be read rather than
+ * a caption to be glanced at - and because it is the one thing on that sheet that is
+ * not a figure.
+ */
+.review-text {
+  font-size: var(--text-body);
+  line-height: 1.55;
+  color: var(--ink);
+  margin: 0;
+  text-wrap: pretty;
+}
 .field-error { font-size: var(--text-caption); color: var(--spend); font-weight: var(--weight-medium); }
 
 /* A field error rendered by the template rather than toggled by [hidden]. */

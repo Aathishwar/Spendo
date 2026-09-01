@@ -776,7 +776,27 @@ function suggestRow(suggestions, current) {
     </div>`;
 }
 
-export function addSheet({ direction, category: catId, date, amount, description, suggestions }) {
+/*
+ * Where an auto-picked category came from, said quietly.
+ *
+ * It is a label, not a badge or a banner: the guess is usually right and usually
+ * uninteresting, so it should be legible when looked for and invisible otherwise.
+ * It names the source because "why did it pick that" is the first question anyone
+ * asks the first time it gets one wrong, and "from what you typed before" and "a
+ * guess" deserve different amounts of trust.
+ */
+function pickedNote(picked) {
+  if (!picked) return '';
+  const from = {
+    history: 'from your past entries',
+    cache: 'from your past entries',
+    keyword: 'from the description',
+    ai: 'a guess'
+  }[picked] || '';
+  return from ? `<span class="field-hint">Picked ${esc(from)}</span>` : '';
+}
+
+export function addSheet({ direction, category: catId, date, amount, description, suggestions, picked }) {
   const cats = categoriesFor(direction);
   const chosen = catId || cats[0].id;
 
@@ -813,7 +833,10 @@ export function addSheet({ direction, category: catId, date, amount, description
       ${suggestRow(suggestions, description)}
 
       <div class="field">
-        <span class="field-label">Category</span>
+        <span class="field-label-row">
+          <span class="field-label">Category</span>
+          ${pickedNote(picked)}
+        </span>
         <div class="chip-row" role="group" aria-label="Category">
           ${cats.map((c) => `
             <button type="button" class="chip ${c.id === chosen ? 'is-selected' : ''}"
@@ -1011,6 +1034,95 @@ export function signInSheet({ step = 'email', email = '', error = '', busy = fal
       </button>
       <p class="card-note">No password. A code is emailed each time you sign in on a new device.</p>
     </form>`;
+}
+
+/**
+ * One month, opened from History.
+ *
+ * Tapping a month used to silently change which month Home was showing and drop you
+ * on Home to notice - an action with no visible cause. It opens this instead, which
+ * is the same pattern a transaction row already uses, and the jump is now a button
+ * that says what it does.
+ *
+ * The figures are always here. The paragraph is not: it needs the model, and the
+ * model needs a session, a signal and a key. So the numbers are the content and the
+ * writing is a bonus laid on top - never the other way round, or the screen would be
+ * empty on a train.
+ */
+export function monthSheet(facts, review) {
+  const line = (label, value, cls = '') => `
+    <div class="field-row">
+      <span class="field-row-label">${esc(label)}</span>
+      <span class="field-row-value money ${cls}">${esc(value)}</span>
+    </div>`;
+
+  // The same row Insights uses, minus the tap: identical shape means the reader has
+  // already learnt to read it, and it costs no new CSS.
+  const bars = facts.top.length ? `
+    <div class="group-rows">
+      ${facts.top.map((t) => `
+        <div class="cat-row">
+          <span class="cat-dot" style="background:${seriesVar(t.id)}"></span>
+          <span class="cat-main">
+            <span class="cat-title">${esc(category(t.id).label)}</span>
+            ${rowBarSVG(t.share, t.id)}
+          </span>
+          <span class="cat-end">
+            <span class="row-amount money">${esc(money(t.amount))}</span>
+            <span class="row-sub">${(t.share * 100).toFixed(t.share < 0.1 ? 1 : 0)}%</span>
+          </span>
+        </div>`).join('')}
+    </div>` : '';
+
+  const change = facts.prev
+    ? `<p class="card-note">${facts.prev.delta === 0
+        ? `Exactly what you spent in ${esc(monthLabel(facts.prev.ym))}.`
+        : `${esc(money(Math.abs(facts.prev.delta)))} ${facts.prev.delta > 0 ? 'more' : 'less'} than
+           ${esc(monthLabel(facts.prev.ym))}${facts.prev.deltaPct === null ? ''
+             : ` (${facts.prev.delta > 0 ? '+' : ''}${Math.round(facts.prev.deltaPct * 100)}%)`}.`}</p>`
+    : '';
+
+  const written = review
+    ? `<p class="review-text">${esc(review)}</p>`
+    : `<p class="card-note">${facts.aiPossible
+        ? 'Writing a summary...'
+        : 'Sign in to get this month written up in a sentence.'}</p>`;
+
+  return `
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Close">${icon('x')}</button>
+        <h2 class="sheet-title">${esc(monthLabel(facts.ym))}${facts.isCurrent ? ' so far' : ''}</h2>
+      </div>
+
+      <section class="review">${written}</section>
+
+      <div class="field-rows">
+        ${line('Spent', money(facts.spent), 'is-out')}
+        ${facts.received > 0 ? line('Received', money(facts.received), 'is-in') : ''}
+        ${line('Left', money(facts.balance))}
+      </div>
+      ${change}
+
+      ${bars}
+
+      <div class="field-rows">
+        <div class="field-row">
+          <span class="field-row-label">Entries</span>
+          <span class="field-row-value">${esc(plural(facts.count, 'entry', 'entries'))} on
+            ${esc(plural(facts.activeDays, 'day', 'days'))}</span>
+        </div>
+        ${facts.biggest ? `
+        <div class="field-row">
+          <span class="field-row-label">Biggest</span>
+          <span class="field-row-value"><span class="money is-out">${esc(money(facts.biggest.amount))}</span>
+            ${esc(facts.biggest.description || category(facts.biggest.category).label)}</span>
+        </div>` : ''}
+      </div>
+
+      <button class="btn btn-primary btn-block" data-action="open-month" data-open-month="${esc(facts.ym)}"
+        type="button">Open ${esc(monthLabel(facts.ym))}</button>
+    </div>`;
 }
 
 export function monthShort(iso) {

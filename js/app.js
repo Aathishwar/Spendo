@@ -15,6 +15,8 @@ import {
 } from './format.js';
 import { categoriesFor, category, defaultCategory } from './categories.js';
 import * as account from './identity.js';
+import * as ai from './ai.js';
+import { guess, remember } from './categorise.js';
 
 const view = document.getElementById('view');
 const fab = document.getElementById('fab');
@@ -41,6 +43,9 @@ let signin = null;    // { step, email, error, busy, sending }
 // only be used once. Held here so Settings can offer it whenever the user gets there,
 // rather than only in the second it happened to fire.
 let installPrompt = null;
+// Which month's review sheet is open, so it can be repainted when the write-up
+// arrives without reopening it under the reader.
+let reviewYM = null;
 
 /* ------------------------------------------------------------------- theme */
 
@@ -212,7 +217,11 @@ function openAdd(direction = 'out') {
     category: defaultCategory(direction),
     date: todayISO(),
     amount: '',
-    description: ''
+    description: '',
+    // Set the moment a chip is tapped, and never cleared for this entry: a guess
+    // must not overrule a choice.
+    categoryTouched: false,
+    picked: null
   };
   openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
 }
@@ -240,6 +249,95 @@ function filterSuggestions(form) {
     any = any || show;
   }
   wrap.hidden = !any;
+}
+
+/* --------------------------------------------------------- category guessing */
+
+const GUESS_DEBOUNCE = 400;
+let guessTimer = null;
+let guessSeq = 0;
+
+/**
+ * Pick a category from what has been typed, unless the user has already picked one.
+ *
+ * `draft.categoryTouched` is the whole safety rule: one tap on a chip and this never
+ * fires again for that entry. An assistant that keeps overruling a decision you have
+ * made is worse than one that never helps.
+ *
+ * Local layers answer synchronously and apply at once. Only a miss reaches the
+ * server, and only then if signed in and online - so the common path costs nothing
+ * and works on a train.
+ */
+function guessCategory() {
+  clearTimeout(guessTimer);
+  if (!draft || draft.categoryTouched) return;
+
+  const form = document.getElementById('add-form');
+  if (!form) return;
+  const description = form.elements.description.value.trim();
+
+  // Below three characters there is nothing to go on, and a chip flickering between
+  // categories on every keystroke reads as a fault.
+  if (description.length < 3) return;
+
+  const local = guess(description, draft.direction);
+  if (local) return applyGuess(local.category, local.source, description);
+
+  guessTimer = setTimeout(() => askServer(description), GUESS_DEBOUNCE);
+}
+
+async function askServer(description) {
+  const seq = ++guessSeq;
+  const ids = categoriesFor(draft ? draft.direction : 'out').map((c) => c.id);
+
+  const found = await ai.suggestCategory(description, ids);
+
+  // A late answer is dropped. The sheet may have been closed, the direction changed,
+  // or the description typed further - and a category appearing under someone who has
+  // moved on is exactly the behaviour that makes people distrust the feature.
+  if (!found || seq !== guessSeq || !draft || draft.categoryTouched) return;
+  const form = document.getElementById('add-form');
+  if (!form || form.elements.description.value.trim() !== description) return;
+
+  // Cached locally so this description never has to be sent again.
+  remember(description, found);
+  applyGuess(found, 'ai', description);
+}
+
+/**
+ * Select a chip without re-rendering the sheet.
+ *
+ * Re-rendering would replace the description input and take the keyboard away
+ * mid-word, which is the same trap the suggestion chips avoid.
+ */
+function applyGuess(categoryId, source, description) {
+  if (!draft || draft.categoryTouched) return;
+  draft.category = categoryId;
+  draft.picked = source;
+  draft.pickedFor = description;
+
+  const form = document.getElementById('add-form');
+  if (!form) return;
+
+  for (const chip of form.querySelectorAll('[data-category]')) {
+    const on = chip.dataset.category === categoryId;
+    chip.classList.toggle('is-selected', on);
+    chip.setAttribute('aria-pressed', String(on));
+  }
+
+  const note = form.querySelector('.field-label-row .field-hint');
+  const text = { history: 'from your past entries', cache: 'from your past entries',
+                 keyword: 'from the description', ai: 'a guess' }[source];
+  if (note && text) note.textContent = `Picked ${text}`;
+  else if (!note && text) {
+    const row = form.querySelector('.field-label-row');
+    if (row) {
+      const span = document.createElement('span');
+      span.className = 'field-hint';
+      span.textContent = `Picked ${text}`;
+      row.append(span);
+    }
+  }
 }
 
 /** Reads the sheet's current inputs so a direction or category tap does not wipe them. */
@@ -272,6 +370,58 @@ function closeCalendar() {
   picking = null;
   if (from === 'detail') reopenDetail();
   else openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
+}
+
+/* ------------------------------------------------------------ month review */
+
+/**
+ * Open a month, with its figures now and its write-up when it arrives.
+ *
+ * The figures are computed on the device and are the content; the paragraph is laid
+ * on top if a model can be reached. Nothing here waits on the network - the sheet is
+ * fully readable the instant it opens, offline included.
+ */
+function openMonth(month) {
+  reviewYM = month;
+  const facts = store.monthReview(month);
+  const held = store.reviewText(month);
+
+  paintMonth(facts, held ? held.text : null);
+  if (held || !account.isSignedIn() || !navigator.onLine) return;
+
+  ai.writeReview({
+    ym: facts.ym,
+    isCurrent: facts.isCurrent,
+    spent: facts.spent,
+    received: facts.received,
+    opening: facts.opening,
+    balance: facts.balance,
+    count: facts.count,
+    activeDays: facts.activeDays,
+    daysInMonth: facts.daysInMonth,
+    // The amount, never what it was for. No description leaves the device here.
+    biggestAmount: facts.biggest ? facts.biggest.amount : 0,
+    top: facts.top.map((t) => ({ label: category(t.id).label, amount: t.amount, share: t.share })),
+    prev: facts.prev ? { spent: facts.prev.spent, delta: facts.prev.delta } : null
+  }).then((text) => {
+    if (!text) {
+      // Still show the sheet, just without the paragraph. paintMonth's own fallback
+      // copy would keep saying "Writing a summary..." forever otherwise.
+      if (reviewYM === month) paintMonth(facts, null, true);
+      return;
+    }
+    store.setReviewText(month, text);
+    if (reviewYM === month) paintMonth(facts, text);
+  });
+}
+
+function paintMonth(facts, text, gaveUp = false) {
+  const withFlag = {
+    ...facts,
+    aiPossible: !gaveUp && account.isSignedIn() && navigator.onLine
+  };
+  sheetContent.innerHTML = ui.monthSheet(withFlag, text);
+  if (!sheet.open) sheet.showModal();
 }
 
 /* ----------------------------------------------------------------- sign in */
@@ -655,7 +805,7 @@ document.addEventListener('click', (e) => {
     '[data-direction]', '[data-category]', '[data-theme]',
     '[data-slice]', '[data-edit-field]', '[data-set-category]',
     '[data-set-direction]', '[data-pick-day]', '[data-set-day]', '[data-cal-step]',
-    '[data-suggest-value]'
+    '[data-suggest-value]', '[data-open-month]'
   ].join(', '));
   if (!el) return;
 
@@ -669,6 +819,7 @@ document.addEventListener('click', (e) => {
       const slot = form.querySelector('[data-error="description"]');
       if (slot) slot.hidden = true;
       filterSuggestions(form);
+      guessCategory();
       form.elements.description.focus();
     }
     return;
@@ -685,7 +836,14 @@ document.addEventListener('click', (e) => {
   }
 
   // Month chips on Insights, and rows on History
-  if (el.dataset.month) { ym = el.dataset.month; tab = 'today'; render({ animate: true }); return; }
+  if (el.dataset.month) { openMonth(el.dataset.month); return; }
+  if (el.dataset.openMonth) {
+    ym = el.dataset.openMonth;
+    tab = 'today';
+    closeSheet();
+    render({ animate: true });
+    return;
+  }
 
   // Add sheet, direction and category
   if (el.dataset.direction && draft) {
@@ -696,6 +854,9 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (el.dataset.category && draft) {
+    // From here on this entry's category is the user's, and no guess may move it.
+    draft.categoryTouched = true;
+    draft.picked = null;
     captureDraft();
     draft.category = el.dataset.category;
     openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
@@ -871,7 +1032,10 @@ document.addEventListener('input', (e) => {
 
   if (el.name === 'amount') filterAmountInput(el);
 
-  if (el.name === 'description' && el.form) filterSuggestions(el.form);
+  if (el.name === 'description' && el.form) {
+    filterSuggestions(el.form);
+    guessCategory();
+  }
 
   // A sign-in code is six digits. An autofilled SMS or a pasted "code: 123456" both
   // arrive with characters around them, and none of them belong in the field.
@@ -1000,6 +1164,7 @@ sheet.addEventListener('click', (e) => {
 sheet.addEventListener('close', () => {
   sheetContent.innerHTML = '';
   signin = null;
+  reviewYM = null;
   if (introStep !== null) {
     introStep = null;
     if (!store.settings().seenIntro) {

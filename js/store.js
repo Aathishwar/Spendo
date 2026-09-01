@@ -25,7 +25,13 @@ const EMPTY = {
   settings: { theme: 'system', seenIntro: false },
   // What the sync engine remembers between runs. `cursor` is the server's change
   // sequence, not a timestamp; see server/src/schema.sql for why.
-  sync: { cursor: 0, lastSyncedAt: null }
+  sync: { cursor: 0, lastSyncedAt: null },
+  // ym -> { text, stamp, madeAt }. The written summary of a month, kept because it
+  // costs a model call to produce and never changes once the month is over. `stamp`
+  // is a fingerprint of the figures it was written from, so an edit to an old month
+  // invalidates it rather than leaving a paragraph that quietly disagrees with the
+  // numbers beside it.
+  reviews: {}
 };
 
 let state = load();
@@ -44,7 +50,8 @@ function load() {
       ...structuredClone(EMPTY),
       ...parsed,
       settings: { ...EMPTY.settings, ...(parsed.settings || {}) },
-      sync: { ...EMPTY.sync, ...(parsed.sync || {}) }
+      sync: { ...EMPTY.sync, ...(parsed.sync || {}) },
+      reviews: { ...(parsed.reviews || {}) }
     };
   } catch (e) {
     // A private window, cleared site data, or a browser refusing storage. The app
@@ -122,6 +129,18 @@ export function entriesFor(ym) {
   return state.entries
     .filter((e) => e.ym === ym && !e.deletedAt)
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.createdAt - b.createdAt));
+}
+
+/**
+ * Every entry, every month, oldest first.
+ *
+ * For the category guesser, which learns from the whole history rather than from one
+ * month. Returns the live array rather than a copy: it is read on every keystroke of
+ * a description, and cloning several hundred records for that would be the slowest
+ * thing in the app.
+ */
+export function snapshotEntries() {
+  return state.entries;
 }
 
 export function entry(entryId) {
@@ -382,6 +401,107 @@ export function clearLedger() {
   state.entries = [];
   state.months = {};
   state.sync = { cursor: 0, lastSyncedAt: null };
+  commit();
+}
+
+/* ------------------------------------------------------------------ review */
+
+/**
+ * The figures behind a month, ready to be read or written up.
+ *
+ * Every number here is computed locally and is therefore always available, always
+ * right, and free. That split is deliberate: when a model is involved later it is
+ * given these figures and asked only to write a sentence about them. It is never
+ * asked what the numbers are, because a paragraph that is confidently wrong about
+ * your money is worse than no paragraph.
+ */
+export function monthReview(ym) {
+  const list = entriesFor(ym);
+  const stats = monthStats(ym);
+
+  const out = list.filter((e) => e.direction === 'out');
+
+  const byCategory = new Map();
+  for (const e of out) byCategory.set(e.category, (byCategory.get(e.category) || 0) + e.amount);
+  const top = [...byCategory]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([id, amount]) => ({
+      id,
+      amount,
+      share: stats.spent > 0 ? amount / stats.spent : 0
+    }));
+
+  const biggest = out.reduce((best, e) => (!best || e.amount > best.amount ? e : best), null);
+
+  // Days with any spending, not days in the month: "you spent on 18 of 30 days" is
+  // a different and more useful fact than the average.
+  const perDay = new Map();
+  for (const e of out) perDay.set(e.date, (perDay.get(e.date) || 0) + e.amount);
+  const busiest = [...perDay].sort((a, b) => b[1] - a[1])[0] || null;
+
+  const previousYM = shiftYMBack(ym);
+  const prevList = entriesFor(previousYM).filter((e) => e.direction === 'out');
+  const prevSpent = prevList.reduce((n, e) => n + e.amount, 0);
+  const prev = prevList.length || months().includes(previousYM)
+    ? {
+        ym: previousYM,
+        spent: prevSpent,
+        delta: stats.spent - prevSpent,
+        deltaPct: prevSpent > 0 ? (stats.spent - prevSpent) / prevSpent : null
+      }
+    : null;
+
+  return {
+    ym,
+    spent: stats.spent,
+    received: stats.received,
+    opening: stats.opening,
+    balance: stats.balance,
+    count: list.length,
+    isCurrent: stats.isCurrent,
+    daysInMonth: stats.daysInMonth,
+    activeDays: perDay.size,
+    avgPerActiveDay: perDay.size > 0 ? stats.spent / perDay.size : 0,
+    top,
+    prev,
+    biggest: biggest ? { amount: biggest.amount, date: biggest.date, category: biggest.category,
+                         description: biggest.description } : null,
+    busiest: busiest ? { date: busiest[0], amount: busiest[1] } : null
+  };
+}
+
+/** The month before `ym`, as YYYY-MM. */
+function shiftYMBack(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 2, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * A fingerprint of the figures a written summary was based on.
+ *
+ * Only the numbers a reader would notice changing. Adding an entry to a closed month
+ * moves `spent` and the category split, so the summary is thrown away and rewritten;
+ * renaming a description does not, so it is kept.
+ */
+function reviewStamp(facts) {
+  return [
+    facts.spent, facts.received, facts.count, facts.activeDays,
+    ...facts.top.map((t) => `${t.id}:${t.amount}`),
+    facts.prev ? facts.prev.spent : 'x'
+  ].join('|');
+}
+
+/** The stored write-up for a month, or null if there is none or it is out of date. */
+export function reviewText(ym) {
+  const held = state.reviews[ym];
+  if (!held) return null;
+  return held.stamp === reviewStamp(monthReview(ym)) ? held : null;
+}
+
+export function setReviewText(ym, text) {
+  state.reviews[ym] = { text, stamp: reviewStamp(monthReview(ym)), madeAt: Date.now() };
   commit();
 }
 
