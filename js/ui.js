@@ -62,7 +62,13 @@ function figure(label, value, note) {
  * stay for screen readers, where repetition costs nothing and is the only channel
  * there is.
  */
-export function entryRow(e) {
+/**
+ * `showCategory: false` drops the second line.
+ *
+ * Inside an expanded category every row would otherwise repeat the name of the
+ * category it is filed under, which is the one thing the reader already knows.
+ */
+export function entryRow(e, { showCategory = true } = {}) {
   const cat = category(e.category);
   const income = e.direction === 'in';
   const tone = income ? 'is-in' : 'is-out';
@@ -75,7 +81,7 @@ export function entryRow(e) {
       <span class="row-tile" style="--tile-hue:${seriesVar(e.category)}">${icon(cat.icon)}</span>
       <span class="row-main">
         <span class="row-title">${esc(e.description || cat.label)}</span>
-        <span class="row-sub">${esc(cat.label)}</span>
+        ${showCategory ? `<span class="row-sub">${esc(cat.label)}</span>` : ''}
       </span>
       <span class="row-end">
         <span class="sr-only">${income ? 'you received' : 'you paid'}</span>
@@ -151,8 +157,8 @@ export function ledgerFoot(entries) {
 }
 
 /** Just the rows, so a keystroke can replace them without disturbing the input. */
-export function txnRows(entries) {
-  return entries.map(entryRow).join('');
+export function txnRows(entries, options) {
+  return entries.map((e) => entryRow(e, options)).join('');
 }
 
 /** The line under the field that reports what the query matched. */
@@ -345,7 +351,7 @@ export function screenInsights(ctx) {
     const on = selected === t.id;
     return `
       <button class="cat-row ${on ? 'is-chosen' : ''}${selected && !on ? ' is-dimmed' : ''}"
-        data-slice="${esc(t.id)}" type="button" aria-pressed="${on}">
+        data-slice="${esc(t.id)}" type="button" aria-pressed="${on}" aria-expanded="${on}">
         <span class="cat-dot" style="background:${seriesVar(t.id)}"></span>
         <span class="cat-main">
           <span class="cat-title">${esc(cat.label)}</span>
@@ -355,7 +361,12 @@ export function screenInsights(ctx) {
           <span class="row-amount money">${esc(money(t.amount))}</span>
           <span class="row-sub">${(t.share * 100).toFixed(t.share < 0.1 ? 1 : 0)}%</span>
         </span>
-      </button>`;
+        ${icon(on ? 'caret-up' : 'caret-down', 'cat-caret')}
+      </button>
+      ${on ? `<div class="cat-expand">${txnRows(
+        ctx.entries.filter((e) => e.category === t.id && e.direction === 'out'),
+        { showCategory: false }
+      )}</div>` : ''}`;
   }).join('');
 
   return head + `
@@ -364,7 +375,9 @@ export function screenInsights(ctx) {
         ${donutSVG(totals, selected)}
         <div class="donut-centre">${centre}</div>
       </div>
-      <p class="card-hint donut-hint">${selected ? 'Tap again to clear' : 'Tap a slice or a row for detail'}</p>
+      <p class="card-hint donut-hint">${selected
+        ? 'Tap the row again to close it'
+        : 'Tap a slice or a row to see what is in it'}</p>
     </section>
 
     <section class="list">
@@ -769,9 +782,9 @@ function suggestRow(suggestions, current) {
     <div class="suggest" data-suggest ${list.some(shown) ? '' : 'hidden'}>
       <span class="suggest-label">Recent</span>
       <div class="chip-row">
-        ${list.map((s) => `
+        ${list.map((s, i) => `
           <button type="button" class="chip chip-sm" data-suggest-value="${esc(s)}"
-            ${shown(s) ? '' : 'hidden'}>${esc(s)}</button>`).join('')}
+            data-rank="${i}" ${shown(s) ? '' : 'hidden'}>${esc(s)}</button>`).join('')}
       </div>
     </div>`;
 }

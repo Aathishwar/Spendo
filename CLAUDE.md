@@ -125,6 +125,12 @@ are worth keeping in mind because they will recur:
   unlock was computed inside `render()`, which runs before focusing the search field scrolls
   the page. Opening search at the bottom of the page left the list locked shut with nowhere
   else to scroll. `render()` now calls the sync a second time on the next frame.
+- **A row that only highlights something else is half a control.** Tapping a category in
+  Insights lit its donut slice and changed the centre figure, which answers "how much" and
+  not "on what" - and "on what" is the question a share of 17% actually raises. The row now
+  expands to the transactions inside it, and one of those opens its detail sheet. The
+  expansion drops the category line from each row, since repeating the name of the category
+  you just opened is the one thing the reader already knows.
 - **`<datalist>` is a desktop control.** The description field offered recent entries
   through one, and on the phone it never opened - which is the whole feature, since a
   suggestion nobody can see is not a suggestion. Three separate reasons, any one of which is
@@ -516,6 +522,21 @@ Two more rules that are easy to get wrong:
   was made for; if either has moved on, the reply is discarded. A category appearing
   under someone who has already moved past that field is exactly the behaviour that
   makes people stop trusting the feature.
+
+### Two things that look like the same feature and are not
+
+**Suggestion chips move to the front on their own.** Hiding the misses is enough,
+because a hidden chip takes no space in a flex row. What that does NOT do is put the
+LIKELIEST one first: typing "cof" left a more recently used "Morning filter coffee"
+ahead of "Coffee beans refill". Anything starting with what was typed now sorts
+first; everything else keeps its recency order, which is what `data-rank` on each
+chip is for, and the original order is restored when the field is cleared.
+
+**Tapping a suggestion runs the category guess too.** It is a description arriving,
+which is the same event as one being typed, so it goes through the same path -
+tapping "Petrol" fills the field and moves the chip to Transport in one action.
+
+---
 
 ### Writing up a month
 

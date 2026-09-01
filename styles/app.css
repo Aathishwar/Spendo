@@ -407,6 +407,24 @@ button { font: inherit; color: inherit; }
 .donut-hint { color: var(--ink-3); }
 
 .cat-row.is-dimmed { opacity: 0.5; }
+
+/* Which way the row will go, on the row itself rather than in the hint below. */
+.cat-caret { width: 1rem; height: 1rem; flex: none; color: var(--ink-3); margin-left: var(--space-2); }
+
+/*
+ * The transactions inside a category, revealed under its row.
+ *
+ * Sunken rather than indented: an indent on a list this narrow costs real width from
+ * the description, which is the column the reader is actually here for. A different
+ * ground says "these belong to the row above" without taking any.
+ */
+.cat-expand {
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--line);
+}
+.cat-expand .row { background: transparent; }
+.cat-expand .row + .row { border-top: 1px solid var(--line); }
+.cat-expand .row:active, .cat-expand .row:hover { background: var(--surface-hover); }
 .cat-row.is-chosen { box-shadow: inset 3px 0 0 var(--ink); background: var(--surface-hover); }
 
 .chart-share { display: block; width: 100%; height: 14px; }

@@ -238,9 +238,10 @@ function filterSuggestions(form) {
   if (!wrap) return;
 
   const typed = form.elements.description.value.trim().toLowerCase();
+  const chips = [...wrap.querySelectorAll('[data-suggest-value]')];
   let any = false;
 
-  for (const chip of wrap.querySelectorAll('[data-suggest-value]')) {
+  for (const chip of chips) {
     const value = chip.dataset.suggestValue.toLowerCase();
     // An exact match is hidden too: offering to fill in what is already there is a
     // control that does nothing.
@@ -249,6 +250,29 @@ function filterSuggestions(form) {
     any = any || show;
   }
   wrap.hidden = !any;
+
+  /*
+   * Best match first.
+   *
+   * Hiding the misses already brings the matches to the front, because a hidden chip
+   * takes no space in the row. What it does not do is put the LIKELIEST one there:
+   * typing "cof" left "Morning filter coffee" ahead of "Coffee beans refill" purely
+   * because it was used more recently. Something starting with what you typed is
+   * almost always the one you meant, so it goes first; everything else keeps its
+   * recency order, which is what `data-rank` is for.
+   *
+   * With nothing typed the original order is restored, so the row does not
+   * quietly stay shuffled from the last thing that was in it.
+   */
+  const row = wrap.querySelector('.chip-row');
+  const rank = (c) => Number(c.dataset.rank || 0);
+  const ordered = chips.slice().sort((a, b) => {
+    if (!typed) return rank(a) - rank(b);
+    const pa = a.dataset.suggestValue.toLowerCase().startsWith(typed) ? 0 : 1;
+    const pb = b.dataset.suggestValue.toLowerCase().startsWith(typed) ? 0 : 1;
+    return pa - pb || rank(a) - rank(b);
+  });
+  for (const chip of ordered) row.append(chip);
 }
 
 /* --------------------------------------------------------- category guessing */
