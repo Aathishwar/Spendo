@@ -54,8 +54,8 @@ services:
       # Display name only. Brevo verifies the address, not this.
       - key: MAIL_FROM_NAME
         value: Spendo
-      # NVIDIA NIM. Unset is a supported state: the category guess falls back to
+      # Groq. Unset is a supported state: the category guess falls back to
       # the phone's own history and keyword table, and month write-ups show their
       # figures without the written summary.
-      - key: NIM_API_KEY
+      - key: GROQ_API_KEY
         sync: false

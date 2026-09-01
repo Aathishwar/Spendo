@@ -11,7 +11,7 @@ computes the balance instead of storing it.
 - **No build step.** Plain HTML, CSS and ES modules. No bundler, no framework, and no
   runtime request to any third-party origin - fonts and icons are vendored.
 - **The model is the last resort, not the first.** The category is guessed from your
-  own history and a keyword table before anything leaves the phone; NVIDIA NIM is
+  own history and a keyword table before anything leaves the phone; Groq is
   asked only about descriptions neither could place, and its answer is cached so the
   same one is never sent twice.
 - **Balance is computed, never stored.** Opening money plus a running sum over entries
@@ -63,7 +63,7 @@ service's **Environment** tab - they are marked `sync: false` and are never in t
 | `DATABASE_URL` | Neon, the **pooled** connection string |
 | `BREVO_API_KEY` | sends the sign-in code |
 | `MAIL_FROM_EMAIL` | a sender **verified** on that Brevo account |
-| `NIM_API_KEY` | NVIDIA NIM, for the category guess and month write-ups. Optional - both fall back cleanly without it |
+| `GROQ_API_KEY` | Groq, for the category guess and month write-ups. Optional - both fall back cleanly without it |
 
 Then point a cron at `https://<service>.onrender.com/healthz` every 10 minutes. The free
 tier idles a service after about 15 minutes, and a cold start is 30+ seconds of someone

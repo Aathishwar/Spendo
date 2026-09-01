@@ -487,7 +487,7 @@ missing, the phone is offline, or nobody is signed in.
 ```
 1  your own history     exact match, then a vote across shared words   0ms, offline
 2  a keyword table      the cold start, before there is any history    0ms, offline
-3  the server, and NIM  only when 1 and 2 both miss                    ~700ms, online
+3  the server, and Groq only when 1 and 2 both miss                    ~700ms, online
 ```
 
 **The ordering is the design, not an optimisation.** A model is the obvious first
@@ -546,10 +546,17 @@ reader has no way to tell the difference. So the numbers are the content and the
 writing is laid on top - never the other way round, or the sheet would be empty on a
 train.
 
-### Choosing the model, and two traps in doing it
+### The provider, the model, and what measuring them taught
 
-`openai/gpt-oss-120b`, picked by measuring ten Indian descriptions the local layers
-would miss:
+**Groq, `qwen/qwen3.8-27b`.** Chosen for a reason that has nothing to do with the two
+features currently using it: it can also see. A category comes from a description and
+a write-up from figures, so neither needs vision - but receipt-photo entry does, and
+running one model for both means one client, one key, one set of limits. That is the
+whole argument for the move; on the text work it answers in 287-764ms, roughly three
+times faster than what it replaced.
+
+It replaced NVIDIA NIM and `openai/gpt-oss-120b`, which had been picked by measuring
+ten Indian descriptions the local layers would miss:
 
 | model | right | median | worst |
 |---|---|---|---|
@@ -559,24 +566,42 @@ would miss:
 
 The 120b being both more accurate AND twice as fast as the 20b is not what anyone
 would predict. That is the argument for running the test rather than recognising a
-name.
+name, and it is why the notes below are kept: they are about the shape of the
+problem, not about one vendor.
 
-- **`/v1/models` is a catalogue, not an entitlement.** It lists 82 and most of them
-  return 404 on the first chat call. `meta/llama-3.1-8b-instruct`, which was the
-  original default here purely because it sounded like the obvious small model, is not
-  among the ones this key can invoke at all.
-- **`max_tokens: 8` produced nothing usable from any model on this endpoint.** They
-  all reason first. gpt-oss puts that in `reasoning_content` and leaves `content`
-  clean; nemotron-lightning puts it in `content`, which is why it scores 5/10 - half
-  its replies are the opening of a thinking-out-loud that the budget cut off. The
-  budget has to cover the thinking even when the answer is one word, so it is 512.
+- **A model listed is not a model you may invoke.** NIM's `/v1/models` returned 82 and
+  most of them 404'd on the first chat call. `meta/llama-3.1-8b-instruct`, the original
+  default here purely because it sounded like the obvious small model, was not among
+  the ones the key could call at all. Anything set here has to be tried.
+- **`max_tokens: 8` produced nothing usable from any model tried.** They all reason
+  first, and where they put that reasoning differs: gpt-oss uses a separate
+  `reasoning_content` and leaves `content` clean, nemotron-lightning writes it into
+  `content`, and Qwen wraps it in `<think>` tags inside `content`. The budget has to
+  cover the thinking even when the answer is one word, so it is 512, and the reply is
+  read with `reasoning_format: 'hidden'` AND a `<think>` strip - an unclosed tag from a
+  budget that ran out mid-thought would otherwise arrive as the answer.
+- **Reachability is not a property of the code.** `api.groq.com` was unreachable from
+  the development machine for part of a session - TLS handshake rejected on the SNI,
+  while the same IP accepted a handshake for a different hostname and NIM worked
+  throughout. Nothing in the app was wrong. Test the endpoint before debugging the
+  client.
 
-**Real latency is not the benchmark latency.** In a tight loop the model answers in
+**Real latency is not the benchmark latency.** In a tight loop these models answer in
 about a second; spaced out the way a person actually types, the same calls took 2.2s
-to 7.8s, because the NIM function goes cold between them. That is why the client
+to 7.8s, because a cold function is slower than a warm one. That is why the client
 waits twelve seconds rather than six, and why a late answer is cached even when it is
 too late to apply: the same description will be typed again, and next time layer 1
 has it.
+
+**A prompt that says "answer `other` when unsure" is not enough, and saying it twice
+is too much.** Asked to place a bare personal name, the model put "thari" in Shopping
+rather than admit it could not tell - so the prompt gained a rule that a name with no
+thing bought is not a purchase. That rule then over-applied: "gobi", "maavu", "router"
+and "book" all came back as `other`, trading a wrong category for a useless one. It
+needs both halves - a name alone is not a purchase, AND anything actually named is
+categorised by that thing however unfamiliar the word. Some things a prompt cannot
+reach at all: that "thari" is a person is a fact about the owner's life, not something
+inferrable from four letters, so it is an explicit override.
 
 ### What leaves the device
 

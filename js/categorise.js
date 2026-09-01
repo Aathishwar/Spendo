@@ -5,7 +5,7 @@
  *
  *   1. your own history      exact, then a vote across shared words
  *   2. a keyword table       for the first weeks, before there is any history
- *   3. the server, and NIM   only when 1 and 2 both miss
+ *   3. the server, and Groq  only when 1 and 2 both miss
  *
  * The ordering is the whole design. A model is the obvious thing to reach for and
  * the wrong thing to reach for first: it costs a round trip on the hottest path in

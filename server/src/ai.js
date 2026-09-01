@@ -1,8 +1,8 @@
 /**
  * Spendo - the model, and the two things it is allowed to do
  *
- * NVIDIA NIM speaks the OpenAI chat-completions shape, so this is a fetch and a
- * JSON body; there is no SDK to add.
+ * Groq speaks the OpenAI chat-completions shape, so this is a fetch and a JSON
+ * body; there is no SDK to add.
  *
  * The key lives here and only here. It cannot go in the client - anything the page
  * can read, anyone reading the page can read - so both features are server routes
@@ -23,55 +23,50 @@
  * both routes answer "no", and every local layer of the app carries on unchanged.
  */
 
-const NIM_URL = process.env.NIM_URL || 'https://integrate.api.nvidia.com/v1/chat/completions';
+const AI_URL = process.env.AI_URL || 'https://api.groq.com/openai/v1/chat/completions';
 
 /*
- * Chosen by measurement, not by recognising the name. Ten Indian expense descriptions
- * that the phone's own layers would miss, scored for accuracy and latency:
+ * Groq, and a model that can also see.
  *
- *   openai/gpt-oss-120b                   10/10   median 1135ms   worst  1416ms
- *   openai/gpt-oss-20b                     9/10   median 2645ms   worst  6021ms
- *   nvidia/nemotron-3.5-lightning-30b-a3b  5/10   median 10315ms  worst 36174ms
+ * The text features here do not need vision - a category comes from a description,
+ * a write-up from figures - but the receipt-photo entry that comes later does, and
+ * running one model for both means one client, one key, one set of limits. That is
+ * the reason for the move off NVIDIA NIM, which had no vision model on this key.
  *
- * The 120b being both more accurate AND twice as fast as the 20b is not what anyone
- * would predict; it is presumably better provisioned. Which is the point of running
- * the test.
+ * Two things learned on NIM that still apply to anything set here:
  *
- * Two things worth knowing before changing this:
- *
- * - /v1/models lists 82 models and is a catalogue, not an entitlement. Most of them
- *   return 404 on the first chat call. Anything set here has to be tried.
- * - The models that do answer REASON first. gpt-oss puts that in `reasoning_content`
- *   and leaves `content` clean; nemotron-lightning puts it in `content`, which is
- *   why it scores 5/10 - half its answers are the start of a thinking-out-loud that
- *   the token budget cut off.
+ * - A model listed by /v1/models is not necessarily a model the key may invoke.
+ *   Anything put here has to be tried before it is trusted.
+ * - These models REASON before answering, so `max_completion_tokens` has to cover
+ *   the thinking as well as the answer, and the reply has to be read with the
+ *   thinking stripped. Qwen wraps it in <think> tags inside `content`; others use a
+ *   separate `reasoning` field. Both are handled below.
  */
-const MODEL = process.env.NIM_MODEL || 'openai/gpt-oss-120b';
+const MODEL = process.env.AI_MODEL || 'qwen/qwen3.8-27b';
 
 /*
  * A model call that hangs is a request that hangs.
  *
- * Generous, because a NIM function that has gone cold takes far longer on the first
- * call than on the tenth, and the client has its own shorter deadline anyway - it
- * gives up in six seconds and shows no guess. A call still running after that is not
- * wasted: it warms the function for the next one.
+ * Generous, because the client has its own shorter deadline anyway and gives up
+ * without showing a guess. A call still running after that is not wasted: its answer
+ * is cached for the next time the same description is typed.
  */
-const TIMEOUT_MS = Number(process.env.NIM_TIMEOUT_MS || 20000);
+const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 20000);
 
-const apiKey = () => process.env.NIM_API_KEY || '';
+const apiKey = () => process.env.GROQ_API_KEY || '';
 
 export function aiConfigured() {
   return Boolean(apiKey());
 }
 
 /*
- * `max_tokens` has to cover the thinking, not just the answer.
+ * The token budget has to cover the thinking, not just the answer.
  *
  * This was 8 for categorisation - one word plus slack - and it produced nothing
- * usable from any model on this endpoint, because the budget was spent before the
- * reasoning finished and `content` came back empty or truncated mid-thought. The
- * app's own validator caught it and returned null, which is the right failure but
- * looked exactly like the feature not working.
+ * usable, because the budget was spent before the reasoning finished and `content`
+ * came back empty or truncated mid-thought. The app's own validator caught it and
+ * returned null, which is the right failure but looked exactly like the feature not
+ * working.
  */
 async function chat(messages, { maxTokens = 512, temperature = 0 } = {}) {
   if (!aiConfigured()) return null;
@@ -80,7 +75,7 @@ async function chat(messages, { maxTokens = 512, temperature = 0 } = {}) {
   const timer = setTimeout(() => control.abort(), TIMEOUT_MS);
 
   try {
-    const res = await fetch(NIM_URL, {
+    const res = await fetch(AI_URL, {
       method: 'POST',
       signal: control.signal,
       headers: {
@@ -92,7 +87,11 @@ async function chat(messages, { maxTokens = 512, temperature = 0 } = {}) {
         model: MODEL,
         messages,
         temperature,
-        max_tokens: maxTokens,
+        max_completion_tokens: maxTokens,
+        // Keep the thinking out of the reply. Where the model honours this the
+        // answer arrives clean; where it does not, the <think> strip below catches
+        // it. Belt and braces, because a leaked thought is not a category id.
+        reasoning_format: 'hidden',
         stream: false
       })
     });
@@ -104,8 +103,12 @@ async function chat(messages, { maxTokens = 512, temperature = 0 } = {}) {
     }
 
     const body = await res.json();
-    const text = body?.choices?.[0]?.message?.content;
-    return typeof text === 'string' ? text.trim() : null;
+    const raw = body?.choices?.[0]?.message?.content;
+    if (typeof raw !== 'string') return null;
+    // A model that reasons inside `content` opens <think> and may never close it if
+    // the budget ran out. Drop from the tag onwards either way.
+    const text = raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+    return text || null;
   } catch (err) {
     // An aborted or failed call is a miss, never an error the user sees: every
     // caller has a local answer to fall back to.
@@ -134,6 +137,20 @@ export async function categorise(description, allowed) {
         `Reply with exactly one id from this list and nothing else: ${allowed.join(', ')}. ` +
         'The descriptions are Indian and often mix English with Tamil or Hindi words, ' +
         'and often name a shop, app or brand rather than the thing bought. ' +
+        // Without this a bare personal name gets forced into whatever category is
+        // nearest - "thari" came back as shopping. Money handed to a person is not
+        // a purchase, and guessing what they spent it on is inventing information.
+        //
+        // The second half matters as much as the first. An earlier version stopped
+        // at "a name is not a purchase" and the model started answering `other` for
+        // anything it found unfamiliar - "gobi", "maavu", "router", "book" - trading
+        // a wrong category for a useless one. Naming a thing is always enough.
+        'A description that is ONLY a person\'s name, with no thing bought, is not a ' +
+        'purchase: answer with the last id in the list. Do the same for money given ' +
+        'to or received from a person, for savings and investments, and for bank ' +
+        'charges. But if the description names anything that was actually bought, ' +
+        'categorise it by that thing, however unfamiliar the word - many are Tamil ' +
+        'names for food and household goods. ' +
         'If none clearly fits, reply with the last id in the list.'
     },
     { role: 'user', content: description }

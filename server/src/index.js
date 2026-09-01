@@ -38,7 +38,7 @@ app.use(attachAccount);
 
 if (!aiConfigured()) {
   console.warn(
-    '[spendo] NIM_API_KEY is not set - the category guess falls back to the phone\'s\n' +
+    '[spendo] GROQ_API_KEY is not set - the category guess falls back to the phone\'s\n' +
     '         own history and keyword table, and month write-ups are figures only.'
   );
 }
