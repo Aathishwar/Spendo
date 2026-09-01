@@ -100,13 +100,18 @@ def build():
     )
     html = html.replace('<script type="module" src="js/app.js"></script>',
                         f'<script type="module">\n{script}\n</script>')
-    # Nothing to install and nothing to fetch in a single file.
+    # Nothing to install and nothing to fetch in a single file. The icon links go
+    # too: they point at files that are not travelling with this one.
     for tag in (
         '<link rel="manifest" href="manifest.webmanifest">\n',
-        '<link rel="icon" href="icons/icon.svg" type="image/svg+xml">\n',
-        '<link rel="apple-touch-icon" href="icons/icon.svg">\n',
+        '<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">\n',
+        '<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">\n',
+        '<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">\n',
     ):
         html = html.replace(tag, '')
+    # And the comment that explains one of them, which would otherwise be left
+    # describing a tag that is no longer there.
+    html = re.sub(r"<!-- iOS ignores the manifest.*?-->\n", '', html, flags=re.S)
 
     out_dir = os.path.join(ROOT, 'dist')
     os.makedirs(out_dir, exist_ok=True)

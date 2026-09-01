@@ -1,5 +1,12 @@
 # Third-party assets in Spendo
 
+## Not third party
+
+The app icon - `icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`,
+`apple-touch-icon.png` and `favicon-32.png` - is the owner's own artwork. Nothing below
+applies to it and it carries no attribution requirement.
+
+
 ## Icons
 
 **Phosphor Icons** (`icons/sprite` inlined in `index.html`), MIT licence.

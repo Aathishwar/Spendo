@@ -7,9 +7,12 @@
 <meta name="description" content="A personal expense tracker. Every tap is saved on the device and returns immediately.">
 
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#f3f5f8">
-<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icons/icon.svg">
+<meta name="theme-color" content="#f0f1ef">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+<!-- iOS ignores the manifest's icons and composites a transparent PNG onto black,
+     so this one is opaque and full bleed; iOS rounds the corners itself. -->
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 

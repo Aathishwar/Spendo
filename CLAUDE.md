@@ -164,9 +164,6 @@ Next: phase 2, the server and sync.
 
 ### Known gaps
 
-- **Icons are SVG only.** `icons/icon.svg` is referenced for every manifest size. Chrome on
-  Android installs from it, but a PNG set (192, 512, and a maskable 512) is the safer route
-  and should be generated before this is treated as installed software.
 - **No tests.** Phase 1 was verified by driving a browser, which is fine for one pass and is
   not a regression net.
 - **Search has no date operators yet.** Keywords and the amount operators (`>500`, `<200`,
@@ -241,8 +238,12 @@ spendo/
   fonts/
     geist-latin-variable.woff2   self-hosted, latin subset, variable weight
   icons/
-    icon.svg            app icon
-    sprite.svg          Phosphor symbols, vendored, inlined into index.html
+    icon-192.png            app icon,   purpose: any
+    icon-512.png            app icon,   purpose: any
+    icon-maskable-512.png   full bleed, purpose: maskable
+    apple-touch-icon.png    180px, opaque - iOS ignores the manifest
+    favicon-32.png          browser tab
+    sprite.svg              Phosphor symbols, vendored, inlined into index.html
   server/               phases 2 to 4
     index.js            serves the app and the API on one origin
     db.js               Postgres, row-level security
@@ -455,6 +456,43 @@ does nothing to a table that already exists, so a column added to a definition a
 first deploy reaches a fresh database only. `migrations.sql` is where it reaches a live one.
 The test suite loads schema.sql alone, because a fresh database already has the final shape -
 and because pg-mem cannot parse several of the alter statements.
+
+---
+
+## The app icon
+
+The source is one 1254px render: a rounded dark-green tile on a white page, with a drop
+shadow. Three shapes are cut from it by `tools/make-icons.py`, and none of them is a
+straight resize:
+
+| File | Purpose | Why it differs |
+|---|---|---|
+| `icon-192`, `icon-512` | `any` | The tile with its own rounded corners, transparent outside |
+| `icon-maskable-512` | `maskable` | Full bleed, artwork at 60% - a platform may crop to a circle of 80% diameter, and the largest square guaranteed to survive that is 80/sqrt(2) = 57% |
+| `apple-touch-icon` | iOS | Opaque and full bleed. iOS ignores the manifest entirely and composites a transparent PNG onto BLACK, then applies its own rounding |
+
+Three things went wrong building it and would go wrong again:
+
+- **The tile's bounding box is not the box of non-white pixels.** That box includes the drop
+  shadow, and one row of it left in becomes a grey ring on the home screen. The tile is found
+  from the box of clearly DARK pixels instead, and cut square from its width - the height
+  that test returns is ~19px taller, which is shadow.
+- **A corner mask drawn on the measured radius still leaks.** The drawn corner is very
+  slightly rounder than a true rounded rectangle, so pixels about 2px outside the real curve
+  fall inside the mask and travel into the icon as white specks. The mask is inset 8px. The
+  script asserts that the four corner squares contain zero page-white pixels; that assertion
+  is the check that matters, because the specks are invisible at review size and obvious on a
+  phone.
+- **Separating artwork from background by BRIGHTNESS loses the dark teal wave.** It computes
+  to 91.6 against a floor of 89.5, so it came out patchy rather than absent, which is harder
+  to notice. Its COLOUR is 76 away from the background while the background's own gradient
+  varies by about 15, so distance separates cleanly where luminance cannot. Related: read the
+  artwork out of the flattened image, not the RGBA one - `convert('RGB')` discards alpha and
+  hands back the white page underneath it.
+
+The alternative artwork supplied alongside this one, with the background already removed, is
+not used: its cutout has a speckled fringe along every edge, and its glyph is cream, which
+disappears against the app's own light ground.
 
 ---
 

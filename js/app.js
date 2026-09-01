@@ -322,7 +322,7 @@ function maybeNudgeSignIn() {
 
 /* ---------------------------------------------------------------- snackbar */
 
-const SNACK_LIFE = 6000;
+const SNACK_LIFE = 3000;
 
 /**
  * Report what just happened, and offer to reverse it if it can be reversed.
