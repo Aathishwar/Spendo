@@ -458,6 +458,71 @@ function syncRows(sync) {
     </div>`;
 }
 
+/*
+ * Installing, from inside the app.
+ *
+ * There was no way to do this before, and the browser's own route is not a reliable
+ * fallback: once Chrome believes a site is installed it replaces Install with Open in
+ * its menu, and it goes on believing that after the app has been removed from the
+ * launcher. Someone in that state has no way back at all.
+ *
+ * Three states, and none of them is a button that silently does nothing:
+ *   already installed   say so, offer nothing
+ *   prompt available    the real button
+ *   no prompt           the manual route for this browser, spelled out
+ */
+function installRows(install) {
+  if (!install) return '';
+
+  if (install.standalone) {
+    return `
+      <div class="field-rows">
+        <div class="field-row">
+          <span class="field-row-label">This device</span>
+          <span class="field-row-value is-ok">Installed</span>
+        </div>
+      </div>
+      <p class="card-note note-under">You are running the installed app. It opens without
+        the browser bars and works with no signal.</p>`;
+  }
+
+  if (install.canPrompt) {
+    return `
+      <div class="field-rows">
+        <div class="field-row">
+          <span class="field-row-label">This device</span>
+          <span class="field-row-value">In the browser</span>
+        </div>
+        <div class="field-row field-row-actions">
+          <button class="btn btn-primary btn-sm" data-action="install-app" type="button">
+            ${icon('download-simple')} Add to home screen
+          </button>
+        </div>
+      </div>
+      <p class="card-note note-under">Opens without the browser bars, and starts faster.
+        Nothing is uploaded by installing; it is the same app.</p>`;
+  }
+
+  // No prompt. On iOS there never is one - Safari has no beforeinstallprompt at all -
+  // and on Android it usually means Chrome still has an older install registered.
+  const how = install.ios
+    ? 'Tap Share, then <strong>Add to Home Screen</strong>.'
+    : 'Open the browser menu and choose <strong>Install app</strong> or ' +
+      '<strong>Add to Home screen</strong>.';
+
+  return `
+    <div class="field-rows">
+      <div class="field-row">
+        <span class="field-row-label">This device</span>
+        <span class="field-row-value">In the browser</span>
+      </div>
+    </div>
+    <p class="card-note note-under">${how}
+      ${install.ios ? '' : ' If the menu offers only <strong>Open Spendo</strong>, ' +
+        'the browser still has an older copy registered: clear this site\'s data in ' +
+        'Android Settings &rarr; Apps &rarr; Chrome &rarr; Storage, then reload.'}</p>`;
+}
+
 export function screenSettings(ctx) {
   const { ym, stats, theme } = ctx;
 
@@ -496,6 +561,11 @@ export function screenSettings(ctx) {
       </div>
       <p class="card-note note-under">What you started the month with, before any expense.
         Set replaces it; Add tops it up when more money arrives mid month.</p>
+    </section>
+
+    <section class="list">
+      ${listHead('download-simple', 'Install')}
+      ${installRows(ctx.install)}
     </section>
 
     <section class="list">

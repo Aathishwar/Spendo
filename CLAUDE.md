@@ -459,6 +459,43 @@ and because pg-mem cannot parse several of the alter statements.
 
 ---
 
+## Installing
+
+**`manifest.webmanifest` declares `"id": "spendo"`, and that string must never change.**
+Without an `id`, Chrome derives the app's identity from `start_url` - which is also what a
+stale installation is keyed on. Changing it orphans every existing install.
+
+The failure it fixes, seen on a real phone: the app was installed under the old icon, the
+icon set was replaced, and the launcher icon never changed. Android bakes the icon into the
+WebAPK at install time and only refreshes it when Chrome happens to notice a manifest change,
+which can take a day and several launches; clearing Chrome's cache does not touch it. So the
+app was uninstalled - and Chrome then offered only **Open Spendo**, never Install, because it
+still had the site registered as installed. At that point there is no route back from inside
+the browser at all.
+
+Two things now cover it:
+
+- **A declared `id`.** It is the documented identity field, and it is what stops the
+  identity drifting with the URL again.
+- **An Install section in Settings**, driven by `beforeinstallprompt`. The event is captured
+  and held rather than used the moment it fires, so the offer is available when someone goes
+  looking for it. `preventDefault()` is called deliberately: Chrome's own mini-infobar
+  otherwise appears over the ledger at a moment nobody chose.
+
+The section has three states and none of them is a button that does nothing:
+
+| State | Shows |
+|---|---|
+| running standalone | "Installed", no button |
+| prompt held | the real Add to home screen button |
+| no prompt | the manual route for this browser - and, on Android, how to clear a stale registration |
+
+That third state is not an edge case. `beforeinstallprompt` does not exist in Safari at all,
+and the prompt is single-use: once `prompt()` has been called the event is spent, whether or
+not the person accepted, so anyone who dismisses the dialog lands there immediately.
+
+---
+
 ## The app icon
 
 The source is one 1254px render: a rounded dark-green tile on a white page, with a drop

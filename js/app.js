@@ -37,6 +37,10 @@ let introStep = null; // which walkthrough screen is showing, or null
 // being used, and whether a request is in flight. Kept here rather than in the DOM
 // so an error can re-render the sheet without losing what was typed.
 let signin = null;    // { step, email, error, busy, sending }
+// Chrome hands the install prompt over once, at a moment of its choosing, and it can
+// only be used once. Held here so Settings can offer it whenever the user gets there,
+// rather than only in the second it happened to fire.
+let installPrompt = null;
 
 /* ------------------------------------------------------------------- theme */
 
@@ -51,6 +55,39 @@ function applyTheme(theme) {
     if (bg) meta.setAttribute('content', bg);
   }
 }
+
+/* ----------------------------------------------------------------- install */
+
+function installState() {
+  const standalone =
+    matchMedia('(display-mode: standalone)').matches ||
+    matchMedia('(display-mode: window-controls-overlay)').matches ||
+    // iOS has never implemented display-mode for home-screen apps.
+    navigator.standalone === true;
+
+  return {
+    standalone,
+    canPrompt: Boolean(installPrompt),
+    ios: /iphone|ipad|ipod/i.test(navigator.userAgent)
+  };
+}
+
+/*
+ * preventDefault stops Chrome's own mini-infobar, which is not a preference: left to
+ * itself it appears over the ledger at a moment nobody chose. The offer moves to
+ * Settings, where it can be taken when the user is looking for it.
+ */
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  if (tab === 'settings' && !sheet.open) render();
+});
+
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  showSnack('Spendo is on your home screen.', null, null, 'check-bold');
+  if (tab === 'settings' && !sheet.open) render();
+});
 
 /* ------------------------------------------------------------------ render */
 
@@ -71,6 +108,7 @@ function render({ animate = false } = {}) {
     totals: store.categoryTotals(ym),
     theme: store.settings().theme,
     sync: sync.syncStatus(),
+    install: installState(),
     search,
     sliceId
   };
@@ -720,6 +758,16 @@ document.addEventListener('click', (e) => {
       break;
     case 'export-json': exportBackup(); break;
     case 'sync-now': sync.syncNow('manual'); break;
+    case 'install-app': {
+      const prompt = installPrompt;
+      // Single use: the event is spent whether or not the person accepts, and calling
+      // prompt() twice throws. Chrome fires a fresh one if they change their mind.
+      installPrompt = null;
+      if (!prompt || typeof prompt.prompt !== 'function') { render(); break; }
+      prompt.prompt();
+      Promise.resolve(prompt.userChoice).catch(() => null).finally(() => render());
+      break;
+    }
     case 'sign-in': openSignIn(); break;
     case 'sign-out': doSignOut(); break;
     case 'signin-back':

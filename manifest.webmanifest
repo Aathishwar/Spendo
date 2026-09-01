@@ -1,4 +1,5 @@
 {
+  "id": "spendo",
   "name": "Spendo",
   "short_name": "Spendo",
   "description": "A personal expense tracker. Every tap is saved on the device and returns immediately.",
