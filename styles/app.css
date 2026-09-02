@@ -1101,6 +1101,30 @@ button { font: inherit; color: inherit; }
    a second-thought action, and a full-width button would read as the point of the card. */
 .tips-card .btn-row { margin-top: var(--space-1); }
 
+/* ------------------------------------------------------------------ confirm */
+
+/*
+ * A yes-or-no sheet. Two buttons on one line, the destructive one on the right where
+ * the thumb is, and the way out on the left in the lowest emphasis the app has - the
+ * proportions of a decision someone should be able to back out of without aiming.
+ */
+.confirm-body {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.confirm-actions .btn { flex: none; }
+
 /* ---------------------------------------------------------- detail sheet */
 
 .field-rows {

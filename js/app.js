@@ -11,12 +11,13 @@ import * as store from './store.js';
 import * as sync from './sync.js';
 import * as ui from './ui.js';
 import {
-  currentYM, longDate, money, monthLabel, shiftYM, todayISO, ymOf
+  currentYM, longDate, money, monthLabel, plural, shiftYM, todayISO, ymOf
 } from './format.js';
 import { categoriesFor, category, defaultCategory } from './categories.js';
 import * as account from './identity.js';
 import * as ai from './ai.js';
 import { guess, remember } from './categorise.js';
+import { workbook } from './xlsx.js';
 
 const view = document.getElementById('view');
 const fab = document.getElementById('fab');
@@ -60,13 +61,24 @@ function applyTheme(theme) {
   if (theme === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', theme);
 
-  // Keep the Android status bar the same colour as the surface behind it.
+  // Keep the Android status bar the same colour as the surface behind it. The first
+  // value is written by js/boot-theme.js before the page paints, because by the time
+  // this module runs the bar has already been drawn; this keeps it right afterwards.
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
     const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
     if (bg) meta.setAttribute('content', bg);
   }
 }
+
+/*
+ * On "System", the OS flipping to dark at sunset has to move the status bar with it.
+ * Nothing else needs doing - the CSS is already listening to the same media query -
+ * so this repaints the one thing CSS cannot reach.
+ */
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (store.settings().theme === 'system') applyTheme('system');
+});
 
 /* ----------------------------------------------------------------- install */
 
@@ -126,7 +138,10 @@ function render({ animate = false } = {}) {
     // History only. Both of these walk every month in the ledger, and there is no
     // reason to pay for that while looking at Home.
     series: tab === 'history' ? store.monthlySeries(TREND_MONTHS) : [],
-    tips: tab === 'history' ? tipsState() : null
+    tips: tab === 'history' ? tipsState() : null,
+    // Everything on the device, not the month being looked at. Settings is the one
+    // screen that is not scoped to a month.
+    totalEntries: store.totalEntries()
   };
   ctx.searchResult = runSearch(ctx.entries, search.query);
 
@@ -687,12 +702,18 @@ async function doSignOut() {
  * A failure is SHOWN. Reporting "signed out everywhere" when the request never
  * landed would tell someone their lost phone is locked out while it is still syncing.
  */
+function askSignOutEverywhere() {
+  openSheet(ui.confirmSheet({
+    title: 'Sign out all devices',
+    body: 'Every device signed in to this account is signed out, including this one. '
+      + 'Your transactions stay on this phone, and each device has to sign in again.',
+    confirmLabel: 'Sign out everywhere',
+    confirmAction: 'confirm-sign-out-all'
+  }));
+}
+
 async function doSignOutEverywhere() {
-  const sure = window.confirm(
-    'Sign out on every device, including this one? '
-    + 'Your transactions stay on this phone. Each device has to sign in again.'
-  );
-  if (!sure) return;
+  closeSheet();
 
   try {
     const out = await account.signOutEverywhere();
@@ -1086,14 +1107,107 @@ function readAmount(form) {
 
 /* ------------------------------------------------------------------ export */
 
+/**
+ * The backup, as a spreadsheet.
+ *
+ * It used to be `JSON.stringify(store.snapshot())`, which is a faithful copy of the
+ * data and no use to the person holding it: nobody opens a year of their own spending
+ * in a text editor, and there is nothing in the app that reads one back. A workbook is
+ * the same information in the form it actually gets used in - sorted, filtered, summed
+ * in a column - and it opens on the phone that produced it.
+ *
+ * Three sheets, because they answer three different questions: what did I spend on,
+ * how did the months compare, and where does it all go.
+ */
 function exportBackup() {
-  const blob = new Blob([JSON.stringify(store.snapshot(), null, 2)], { type: 'application/json' });
+  const entries = store.snapshotEntries()
+    .filter((e) => !e.deletedAt)
+    .slice()
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.createdAt - b.createdAt));
+
+  const transactions = {
+    name: 'Transactions',
+    columns: [
+      { key: 'date', label: 'Date', type: 'date', width: 12 },
+      { key: 'month', label: 'Month', width: 10 },
+      { key: 'direction', label: 'In or out', width: 11 },
+      { key: 'amount', label: 'Amount', type: 'money', width: 12 },
+      { key: 'category', label: 'Category', width: 16 },
+      { key: 'description', label: 'Description', width: 40 }
+    ],
+    rows: entries.map((e) => ({
+      date: e.date,
+      month: e.ym,
+      direction: e.direction === 'in' ? 'Received' : 'Paid',
+      // Signed, so a column of them sums to the net movement rather than to the
+      // total of everything that ever happened.
+      amount: e.direction === 'in' ? e.amount : -e.amount,
+      category: category(e.category).label,
+      description: e.description || ''
+    }))
+  };
+
+  const months = {
+    name: 'Months',
+    columns: [
+      { key: 'ym', label: 'Month', width: 10 },
+      { key: 'opening', label: 'Opening', type: 'money', width: 12 },
+      { key: 'received', label: 'Received', type: 'money', width: 12 },
+      { key: 'spent', label: 'Spent', type: 'money', width: 12 },
+      { key: 'balance', label: 'Left', type: 'money', width: 12 },
+      { key: 'count', label: 'Entries', type: 'number', width: 9 },
+      { key: 'closed', label: 'Closed', width: 9 }
+    ],
+    // Oldest first, so the sheet reads the way the year happened.
+    rows: store.months().slice().reverse().map((ym) => {
+      const stats = store.monthStats(ym);
+      return {
+        ym,
+        opening: stats.opening,
+        received: stats.received,
+        spent: stats.spent,
+        balance: stats.balance,
+        count: stats.count,
+        closed: stats.closed ? 'Yes' : ''
+      };
+    })
+  };
+
+  // Every month's categories added up, which is the one figure Insights can only show
+  // one month at a time.
+  const byCategory = new Map();
+  for (const e of entries) {
+    if (e.direction === 'in') continue;
+    byCategory.set(e.category, (byCategory.get(e.category) || 0) + e.amount);
+  }
+  const totalSpent = [...byCategory.values()].reduce((a, b) => a + b, 0);
+
+  const categories = {
+    name: 'By category',
+    columns: [
+      { key: 'label', label: 'Category', width: 18 },
+      { key: 'amount', label: 'Spent', type: 'money', width: 14 },
+      { key: 'share', label: 'Share', width: 9 }
+    ],
+    rows: [...byCategory]
+      .sort((a, b) => b[1] - a[1])
+      .map(([id, amount]) => ({
+        label: category(id).label,
+        amount,
+        share: totalSpent > 0 ? `${Math.round((amount / totalSpent) * 100)}%` : ''
+      }))
+  };
+
+  const blob = workbook([transactions, months, categories]);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `spendo-backup-${todayISO()}.json`;
+  a.download = `spendo-${todayISO()}.xlsx`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+  showSnack(`Exported ${plural(entries.length, 'transaction', 'transactions')}.`,
+    null, null, 'download-simple');
 }
 
 /* ------------------------------------------------------------------ events */
@@ -1282,7 +1396,8 @@ document.addEventListener('click', (e) => {
     }
     case 'sign-in': openSignIn(); break;
     case 'sign-out': doSignOut(); break;
-    case 'sign-out-all': doSignOutEverywhere(); break;
+    case 'sign-out-all': askSignOutEverywhere(); break;
+    case 'confirm-sign-out-all': doSignOutEverywhere(); break;
     case 'signin-back':
       signin = { ...signin, step: 'email', error: '', busy: false, sending: false };
       paintSignIn();

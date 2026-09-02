@@ -14,8 +14,8 @@ by this app's own server. Once Spendo works, the n8n workflow is switched off en
 **Phase 1 done.** The app runs, offline, with no build step and no network request. Add an
 expense or an income, see the month's balance, a daily-spend chart against the even-spread
 budget, three stat tiles, the transaction list, a per-entry detail sheet where every field
-edits in place, a category breakdown, a month history, search, opening money, theme, and a
-JSON backup export. Everything is in `localStorage`; nothing has left the device yet.
+edits in place, a category breakdown, a month history, search, opening money, theme, and an
+Excel export. Everything is in `localStorage`; nothing has left the device yet.
 
 Verified in a browser at 400x860: all four tabs, the add sheet in both directions, save,
 delete with undo, each field of the detail sheet edited and read back from storage, light and
@@ -250,7 +250,8 @@ spendo/
     app.js              screen logic and events
     sync.js             phase 2: background push and pull
     push.js             phase 4: web push subscription
-    xlsx.js             phase 5: spreadsheet export
+    xlsx.js             .xlsx export: a ZIP and some XML, written by hand
+    boot-theme.js       blocking, sets the theme before the first paint
   sw.js                 service worker, offline shell
   manifest.webmanifest
   fonts/
@@ -750,6 +751,36 @@ shows them instead of retrying forever against a wall.
   - the app works signed out - but on a shared browser the next person can read it.
 - Account creation is free to anyone who can receive mail. The ceiling above bounds what
   each one can cost; nothing bounds how many there are.
+
+## Four things a phone found that a browser did not
+
+- **The status bar is painted from the meta tag before any module runs.** The app in dark
+  mode sat under a white system bar, because `<meta name="theme-color">` was static in the
+  markup and app.js - a module, so deferred - only corrected it after the bar had been
+  drawn. `js/boot-theme.js` is a blocking script in the head that reads the saved theme,
+  stamps `data-theme` on `<html>` and rewrites the meta before the first paint. It is a
+  file rather than an inline script because the CSP is `script-src 'self'` with no hashes,
+  and a policy with a hole in it for one convenient script is a policy that grows holes.
+  It also removes the flash of light theme on load. `matchMedia` is watched afterwards, so
+  "System" follows the OS when it flips at sunset.
+- **Settings answered a question about the device with a figure about the month.** Your
+  data said "Entries 58", and after a reload the same row said 9 - the first was whichever
+  month happened to be open, the second was the current one. It is `store.totalEntries()`
+  now: everything on the device, tombstones excluded, because "58 entries" when 49 of them
+  are deletions is a worse answer than the one it replaced.
+- **`window.confirm` is a browser artefact sitting on top of an installed app.** It renders
+  as "spendo.aathi.online says", in the system font, with the buttons in an order the app
+  does not choose, and it blocks the main thread while it opens. Sign out everywhere now
+  uses `ui.confirmSheet`, the same bottom sheet as everything else, and the action lives on
+  the confirming button rather than in a callback waiting to be resolved.
+- **A JSON backup is honest and useless.** Nobody opens a year of their own spending in a
+  text editor, and nothing in the app reads one back. The export is an .xlsx with three
+  sheets - Transactions, Months, By category - written by `js/xlsx.js`, which is a ZIP
+  writer and some XML rather than a library: the CSP forbids a CDN and vendoring most of a
+  megabyte of SheetJS to write three tables is not a trade worth making. Dates are real
+  Excel dates, amounts are signed so a column of them sums to the net movement, the header
+  row is frozen and filtered. Verified by reading the output back with openpyxl, including
+  Tamil, emoji, quotes, angle brackets, a 600-character description and an embedded newline.
 
 ## Installing
 

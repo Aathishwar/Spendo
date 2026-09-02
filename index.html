@@ -8,6 +8,11 @@
 
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#f0f1ef">
+<!-- Blocking, and above the stylesheets on purpose: it stamps data-theme and
+     rewrites the meta above before anything is painted, so the installed app's
+     status bar matches the theme and a dark-mode load never flashes white.
+     Not inline - the CSP is script-src 'self' with no hashes. -->
+<script src="js/boot-theme.js"></script>
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
 <!-- iOS ignores the manifest's icons and composites a transparent PNG onto black,

@@ -27,7 +27,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Dependency order. A module may only import from ones above it.
-MODULES = ['format', 'categories', 'charts', 'store', 'ui']
+MODULES = ['format', 'categories', 'charts', 'xlsx', 'store', 'ui']
 ENTRY = 'app'
 
 IMPORT_RE = re.compile(
@@ -79,14 +79,23 @@ def build():
     )
     parts.append(f'/* ---- {ENTRY}.js ---- */\n(() => {{\n{entry}\n}})();\n')
 
-    # The backup export saves a Blob, and a hosted preview is not allowed to hand
-    # the viewer a file. Rather than ship a button that silently does nothing, the
-    # preview drops it and says why.
-    parts[MODULES.index('ui')] = parts[MODULES.index('ui')].replace(
-        """      <div class="btn-row">
-        <button class="btn btn-text" data-action="export-json" type="button">Export a backup</button>
-      </div>""",
-        """      <p class="card-note">Backup export is disabled in this preview. It works in the installed app.</p>""",
+    # The export writes a Blob to a download, and a preview hosted inside a sandboxed
+    # frame is not allowed to hand the viewer a file. Rather than ship a button that
+    # silently does nothing, the preview drops it and says why.
+    #
+    # Asserted rather than attempted: a replacement that quietly stops matching when
+    # the markup is reworded is how a preview ends up shipping the thing it was
+    # supposed to remove, which is exactly what happened when the button became
+    # "Export to Excel".
+    export_button = """          <button class="btn btn-text btn-sm" data-action="export-json" type="button">
+            ${icon('download-simple')} Export to Excel
+          </button>"""
+    ui_part = parts[MODULES.index('ui')]
+    if export_button not in ui_part:
+        sys.exit('build-preview: the export button markup moved; update the snippet above')
+    parts[MODULES.index('ui')] = ui_part.replace(
+        export_button,
+        """          <span class="card-note">Export is disabled in this preview.</span>""",
     )
 
     script = '\n'.join(parts)
@@ -96,13 +105,16 @@ def build():
     html = html.replace(
         '<link rel="stylesheet" href="styles/tokens.css">\n'
         '<link rel="stylesheet" href="styles/app.css">',
-        f'<style>\n{css}\n</style>',
+        f'<script>\n{read("js", "boot-theme.js")}\n</script>\n<style>\n{css}\n</style>',
     )
     html = html.replace('<script type="module" src="js/app.js"></script>',
                         f'<script type="module">\n{script}\n</script>')
     # Nothing to install and nothing to fetch in a single file. The icon links go
     # too: they point at files that are not travelling with this one.
     for tag in (
+        # Inlined into the head below rather than dropped: without it the
+        # preview flashes light before the modules run.
+        '<script src="js/boot-theme.js"></script>\n',
         '<link rel="manifest" href="manifest.webmanifest">\n',
         '<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">\n',
         '<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">\n',

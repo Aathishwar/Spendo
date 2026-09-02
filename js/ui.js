@@ -574,10 +574,14 @@ function syncRows(sync) {
         </button>
         <button class="btn btn-text btn-sm" data-action="sign-out" type="button">Sign out</button>
       </div>
+      <div class="field-row field-row-actions">
+        <button class="btn btn-danger btn-sm" data-action="sign-out-all" type="button">
+          ${icon('sign-out')} Sign out all devices
+        </button>
+      </div>
       <p class="card-note">
-        Signing out leaves your transactions on this phone. Lost a device?
-        <button class="link-btn" data-action="sign-out-all" type="button">Sign out everywhere</button>
-        ends every session on this account, including this one.
+        Signing out leaves your transactions on this phone. Signing out of all devices
+        ends every session on this account, including this one - for a phone you have lost.
       </p>
     </div>`;
 }
@@ -717,11 +721,11 @@ export function screenSettings(ctx) {
         </div>
         <div class="field-row">
           <span class="field-row-label">Entries</span>
-          <span class="field-row-value money">${esc(String(stats.count))}</span>
+          <span class="field-row-value money">${esc(String(ctx.totalEntries ?? 0))}</span>
         </div>
         <div class="field-row field-row-actions">
           <button class="btn btn-text btn-sm" data-action="export-json" type="button">
-            ${icon('download-simple')} Export a backup
+            ${icon('download-simple')} Export to Excel
           </button>
           <button class="btn btn-text btn-sm" data-action="show-intro" type="button">
             ${icon('info')} Walkthrough
@@ -764,6 +768,38 @@ const INTRO = [
     body: 'Set your opening money in Settings and the balance counts down from it as you spend. Top it up with Add to it whenever more arrives mid month.'
   }
 ];
+
+/*
+ * A yes-or-no, in the app's own sheet rather than the browser's dialog.
+ *
+ * `window.confirm` was doing this job and doing it badly: it renders as "spendo.
+ * aathi.online says", in the system's font, with OK and Cancel in an order the app
+ * does not control - a browser artefact sitting on top of an installed app. It also
+ * blocks the main thread, which on a phone shows as the app freezing for a moment
+ * before the box appears.
+ *
+ * This is the same bottom sheet everything else uses, so it inherits the type, the
+ * safe-area padding and the close-on-backdrop behaviour. The confirming button
+ * carries the action; there is no callback to keep alive, and no way for the sheet
+ * to be dismissed leaving something half-done.
+ */
+export function confirmSheet({ title, body, confirmLabel, confirmAction, tone = 'danger' }) {
+  return `
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Close">${icon('x')}</button>
+        <h2 class="sheet-title">${esc(title)}</h2>
+      </div>
+
+      <p class="confirm-body">${esc(body)}</p>
+
+      <div class="confirm-actions">
+        <button class="btn btn-text" data-action="close-sheet" type="button">Cancel</button>
+        <button class="btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}"
+          data-action="${esc(confirmAction)}" type="button">${esc(confirmLabel)}</button>
+      </div>
+    </div>`;
+}
 
 export function introSheet(step) {
   const s = INTRO[step];

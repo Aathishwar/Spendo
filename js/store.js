@@ -411,6 +411,24 @@ export function setTips(items) {
   commit();
 }
 
+/**
+ * Everything on this device, across every month.
+ *
+ * Settings asks "how much is stored here", and the answer it was given was
+ * `monthStats(ym).count` - the number of entries in whichever month happened to be
+ * open. Step to a busy month and Your data said 58; reload, which lands back on the
+ * current month, and the same figure said 9. Nothing had changed but the question.
+ *
+ * Tombstones are not counted. A deleted entry is still a row until it has synced,
+ * and "you have 58 entries" when 49 of them are deletions is a worse answer than the
+ * one it replaced.
+ */
+export function totalEntries() {
+  let n = 0;
+  for (const e of state.entries) if (!e.deletedAt) n += 1;
+  return n;
+}
+
 /** Descriptions used before, most recent first, for the add sheet's suggestions. */
 export function recentDescriptions(limit = 8) {
   const seen = [];
