@@ -188,6 +188,21 @@ export async function signOut() {
   return write({ signedIn: false, email: null, accountId: null });
 }
 
+/**
+ * End every session on this account, on every device.
+ *
+ * What a person reaches for when a phone is lost, and the only answer to "someone
+ * has my token" that does not involve waiting for it to expire. Unlike signOut this
+ * one REPORTS a failure rather than swallowing it: "signed out everywhere" is a
+ * claim about other devices, and saying it when the request never landed would be
+ * telling someone their stolen phone is locked out when it is not.
+ */
+export async function signOutEverywhere() {
+  const out = await post('/api/auth/logout-all');
+  write({ signedIn: false, email: null, accountId: null });
+  return out;
+}
+
 /** Called by the sync engine on a 401: the server disagrees with what is cached. */
 export function markSignedOut() {
   if (!account.signedIn) return account;

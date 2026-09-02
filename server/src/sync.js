@@ -119,8 +119,76 @@ const monthOut = (r) => ({
   seq: Number(r.change_seq)
 });
 
+/*
+ * A ceiling on what one account may store.
+ *
+ * There was none, and account creation is free to anyone who can receive mail, so
+ * the shape of the abuse was obvious: sign up, push 2000 records a request, repeat.
+ * Whoever pays the database bill pays for that.
+ *
+ * The numbers are chosen to be invisible to a person and hard work for a script.
+ * Fifty thousand entries is a hundred a week for a decade. Twelve hundred months is
+ * a century of them.
+ *
+ * The cap applies to NEW records only. An account at its ceiling can still edit and
+ * still delete - deletes are tombstones, which are updates - because a limit that
+ * traps someone at their limit with no way down is a bug wearing a policy's hat.
+ */
+const MAX_ENTRIES_PER_ACCOUNT = Number(process.env.MAX_ENTRIES_PER_ACCOUNT || 50_000);
+const MAX_MONTHS_PER_ACCOUNT = Number(process.env.MAX_MONTHS_PER_ACCOUNT || 1200);
+
+/**
+ * Which of these ids the account already has, so an insert can be told from an edit.
+ *
+ * One query for the batch rather than one per record: `= any($2)` takes the whole
+ * list, and the (account_id, id) primary key answers it from the index.
+ */
+async function existingIds(client, table, accountId, column, values) {
+  if (!values.length) return new Set();
+  const { rows } = await client.query(
+    `select ${column} as key from ${table} where account_id = $1 and ${column} = any($2)`,
+    [accountId, values]
+  );
+  return new Set(rows.map((r) => r.key));
+}
+
+/**
+ * Trim a batch to what the account has room for, and say what was left out.
+ *
+ * Rejections come back in the response the same way a malformed record does, so the
+ * device shows them rather than retrying forever against a wall.
+ */
+async function withinQuota(client, accountId, records, opts) {
+  const { table, column, max, kind } = opts;
+  if (!records.length) return { allowed: records, refused: [] };
+
+  const have = await existingIds(client, table, accountId, column, records.map((r) => r[column]));
+  const updates = records.filter((r) => have.has(r[column]));
+  const inserts = records.filter((r) => !have.has(r[column]));
+  if (!inserts.length) return { allowed: records, refused: [] };
+
+  const { rows } = await client.query(
+    `select count(*)::int as n from ${table} where account_id = $1`,
+    [accountId]
+  );
+  const room = Math.max(0, max - rows[0].n);
+  if (inserts.length <= room) return { allowed: records, refused: [] };
+
+  return {
+    allowed: [...updates, ...inserts.slice(0, room)],
+    refused: inserts.slice(room).map((r) => ({
+      id: r[column],
+      kind,
+      reason: `this account is at its limit of ${max} ${kind === 'entry' ? 'entries' : 'months'}`
+    }))
+  };
+}
+
 /** Exported for the test suite, which checks that one bad record cannot wedge a batch. */
 export const readEntryForTest = readEntry;
+
+/** Exported for the test suite, which checks the ceiling lets edits and deletes through. */
+export const withinQuotaForTest = withinQuota;
 
 export async function sync(req, res, next) {
   try {
@@ -161,7 +229,15 @@ export async function sync(req, res, next) {
     }
 
     const result = await transaction(async (client) => {
-      for (const e of entries) {
+      const entryQuota = await withinQuota(client, accountId, entries, {
+        table: 'expenses', column: 'id', max: MAX_ENTRIES_PER_ACCOUNT, kind: 'entry'
+      });
+      const monthQuota = await withinQuota(client, accountId, months, {
+        table: 'months', column: 'ym', max: MAX_MONTHS_PER_ACCOUNT, kind: 'month'
+      });
+      const overQuota = [...entryQuota.refused, ...monthQuota.refused];
+
+      for (const e of entryQuota.allowed) {
         /*
          * The `where` on the conflict clause is what makes this last-write-wins
          * rather than last-request-wins. An older copy of a record arriving from a
@@ -190,7 +266,7 @@ export async function sync(req, res, next) {
         );
       }
 
-      for (const m of months) {
+      for (const m of monthQuota.allowed) {
         await client.query(
           `insert into months (account_id, ym, opening_amount, closed_at, updated_at, change_seq)
            values ($1, $2, $3, $4, $5, nextval('change_seq'))
@@ -220,8 +296,12 @@ export async function sync(req, res, next) {
          limit $3`,
         [accountId, since, PAGE]
       );
-      return { pulledEntries: pulledEntries.rows, pulledMonths: pulledMonths.rows };
+      return { pulledEntries: pulledEntries.rows, pulledMonths: pulledMonths.rows, overQuota };
     });
+
+    // Refused for space, alongside refused for shape. Both are things the device has
+    // to be told about rather than left to retry.
+    rejected.push(...result.overQuota);
 
     const outEntries = result.pulledEntries.map(entryOut);
     const outMonths = result.pulledMonths.map(monthOut);

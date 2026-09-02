@@ -68,6 +68,14 @@ service's **Environment** tab - they are marked `sync: false` and are never in t
 | `AUTH_SECRET` | Keys the sign-in codes stored in the database. Any long random string. Without it they are a plain SHA-256, and a six-digit code hashed that way is recoverable in seconds by anyone who reads the table |
 | `NODE_ENV` | `production`. Set in `render.yaml`; it is what makes the server refuse to issue a sign-in code when mail is not configured |
 
+Optional, with sensible defaults: `AI_CALLS_PER_HOUR` (200 per account),
+`MAX_ENTRIES_PER_ACCOUNT` (50,000) and `MAX_MONTHS_PER_ACCOUNT` (1,200). The last two
+apply to new records only - an account at its ceiling can still edit and delete.
+
+Sessions last **30 days of disuse**, pushed forward while a device is in use, with a
+hard ceiling of 182 days from sign-in. Settings has **Sign out everywhere** for a lost
+phone, which revokes every session on the account.
+
 Then point a cron at `https://<service>.onrender.com/healthz` every 10 minutes. The free
 tier idles a service after about 15 minutes, and a cold start is 30+ seconds of someone
 waiting to record a coffee.

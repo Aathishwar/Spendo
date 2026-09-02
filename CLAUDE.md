@@ -694,14 +694,62 @@ SameSite=Lax cookie that is the actual defence. A missing `Origin` is allowed th
 purpose: same-origin GETs do not send one, and refusing those would break sign-in on the
 phones this is written for while adding nothing.
 
+### Sessions, quotas and the ceiling on an account
+
+A second pass closed the three things the first one left open.
+
+**A session is thirty days of not being used, not thirty days.** Two windows, and they
+answer different questions. `SESSION_IDLE_MS` is how long a device may sit untouched
+before it has to sign in again; it is pushed forward while the device is in use, so a
+phone opened daily never signs itself out. `SESSION_ABSOLUTE_MS` is six months from
+when the session was created and is never extended, which is what stops a stolen token
+living forever simply by being busy. The ceiling is enforced against `created_at` in
+the lookup rather than by writing `expires_at`, because `expires_at` moves and a
+ceiling that moves is not a ceiling. Renewal is lazy - only when less than a quarter of
+the window is left - since rewriting a value that moves in days on every request is a
+write per request for nothing.
+
+The migration shortens every existing session to `last_seen_at + 30 days`, so the
+change costs one sign-in per device and takes effect immediately rather than in a year.
+
+**Sign out everywhere.** `POST /api/auth/logout-all` revokes every session on the
+account, including the one making the request, and it needs a session to call - this is
+a broom for an account you are in, not a recovery flow for one you are locked out of.
+The client confirms first, because it is the only control in the app that reaches other
+people's devices, and it reports a failure rather than swallowing it: telling someone
+their lost phone is signed out when the request never landed is worse than telling them
+nothing. Rows are revoked, not deleted, so the table still explains why six devices
+stopped working in the same minute.
+
+**Dead rows are swept.** Sessions revoked or expired more than a month ago, sign-in
+codes a day past their expiry, and yesterday's quota counters, on boot and then daily.
+The timer is `unref`'d so it cannot hold the process open through a shutdown.
+
+**The model-call cap lives in Postgres.** It was a Map in the process, so it reset on
+every deploy - and this service deploys often, which made the cap one restart away from
+being no cap. One row per account per hour, incremented and read back in the same
+statement so two racing requests cannot both take the last slot. If the counter cannot
+be reached the call is refused rather than allowed: a model call is the one thing here
+that costs money to a third party.
+
+**An account has a ceiling: 50,000 entries and 1,200 months.** A hundred entries a week
+for a decade, and a century of months. It applies to NEW records only - an account at
+its ceiling can still edit and still delete, because deletes are tombstones and a limit
+that traps someone at their limit with no way down is a bug wearing a policy's hat.
+Refusals come back in the same `rejected` list a malformed record uses, so the device
+shows them instead of retrying forever against a wall.
+
 ### Still open
 
-- No storage quota per account on `/api/sync`, and account creation is free to anyone who
-  can receive mail. Both scale linearly with mailboxes.
-- Sessions last 365 days and are not rotated; there is no session list and no "sign out
-  the other devices".
+- The per-source sign-in cap keys on `req.ip`, and the live site is behind Cloudflare
+  with `trust proxy: 1`, so that address is the Cloudflare edge rather than the visitor.
+  Unspoofable but coarse: everyone behind one POP shares a bucket. Left deliberately -
+  the per-address cap of five an hour is the one that protects a person. Fixing it means
+  `trust proxy: 2` plus restricting the Render origin to Cloudflare's ranges.
 - The ledger and the last-used email stay in `localStorage` after signing out. Deliberate
   - the app works signed out - but on a shared browser the next person can read it.
+- Account creation is free to anyone who can receive mail. The ceiling above bounds what
+  each one can cost; nothing bounds how many there are.
 
 ## Installing
 

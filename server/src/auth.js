@@ -44,7 +44,33 @@ const MAX_SENDS_PER_HOUR = 5;
 const MAX_IP_SENDS_PER_HOUR = 20;
 const HOUR_MS = 60 * 60 * 1000;
 
-const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+/*
+ * Thirty days of not being used, and six months at the outside.
+ *
+ * It was a year, flat, which made a token taken off a phone sold last summer a
+ * working credential this summer. Two windows now, and they answer different
+ * questions:
+ *
+ *   SESSION_IDLE_MS      how long a device may sit untouched before it has to prove
+ *                        itself again. Pushed forward every time the session is
+ *                        used, so a phone in daily use never signs itself out.
+ *   SESSION_ABSOLUTE_MS  the ceiling, measured from when the session was created and
+ *                        never extended. A device in constant use still comes back
+ *                        to the sign-in screen twice a year, which is what stops a
+ *                        stolen token living forever simply because it is busy.
+ *
+ * The renewal is deliberately lazy: rewriting expires_at on every request is a write
+ * per request for a value that moves in days. It is pushed forward only when less
+ * than a quarter of the window is left.
+ */
+const SESSION_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_ABSOLUTE_MS = 182 * 24 * 60 * 60 * 1000;
+const SESSION_RENEW_AFTER_MS = SESSION_IDLE_MS * 0.75;
+
+// What the cookie is told. The cookie may outlive the row by a few minutes without
+// harm - the row is what decides - but it must not die first, or a session that is
+// still valid disappears from the browser.
+const COOKIE_MAX_AGE_MS = SESSION_ABSOLUTE_MS;
 export const COOKIE = 'spendo_session';
 
 /*
@@ -137,7 +163,7 @@ function setSessionCookie(req, res, token) {
     httpOnly: true,
     secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
     sameSite: 'lax',
-    maxAge: SESSION_TTL_MS,
+    maxAge: COOKIE_MAX_AGE_MS,
     path: '/'
   });
 }
@@ -147,8 +173,13 @@ function setSessionCookie(req, res, token) {
 /**
  * Resolve the session cookie to an account, or leave the request anonymous.
  *
+ * The absolute ceiling is enforced HERE rather than in the row's expires_at, because
+ * expires_at moves - it is the idle window being pushed forward - and a ceiling that
+ * moves is not a ceiling. `created_at` never moves, so the comparison is honest.
+ *
  * `last_seen_at` is updated without awaiting: it is a diagnostic, and making every
  * sync wait on a second round trip to record that a sync happened is a poor trade.
+ * The idle window rides along on that same write when it is worth writing.
  */
 export async function attachAccount(req, _res, next) {
   req.account = null;
@@ -157,19 +188,33 @@ export async function attachAccount(req, _res, next) {
   if (!token) return next();
 
   try {
+    // The two cutoffs are computed here rather than as interval arithmetic in SQL:
+    // one place decides what the windows mean, and a timestamp parameter says the
+    // same thing to Postgres in every version of it.
+    const now = Date.now();
     const { rows } = await query(
-      `select s.id as session_id, s.account_id, a.email
+      `select s.id as session_id, s.account_id, s.created_at, s.expires_at, a.email
          from sessions s
          join accounts a on a.id = s.account_id
         where s.token_hash = $1
           and s.revoked_at is null
-          and s.expires_at > now()`,
-      [sha256(token)]
+          and s.expires_at > $2
+          and s.created_at > $3`,
+      [sha256(token), new Date(now), new Date(now - SESSION_ABSOLUTE_MS)]
     );
     if (rows.length) {
-      req.account = { id: rows[0].account_id, email: rows[0].email, sessionId: rows[0].session_id };
-      query('update sessions set last_seen_at = now() where id = $1', [rows[0].session_id])
-        .catch(() => { /* not worth failing a request over */ });
+      const row = rows[0];
+      req.account = { id: row.account_id, email: row.email, sessionId: row.session_id };
+
+      const leftMs = new Date(row.expires_at).getTime() - now;
+      const renew = leftMs < SESSION_RENEW_AFTER_MS;
+
+      query(
+        renew
+          ? 'update sessions set last_seen_at = now(), expires_at = $2 where id = $1'
+          : 'update sessions set last_seen_at = now() where id = $1',
+        renew ? [row.session_id, new Date(now + SESSION_IDLE_MS)] : [row.session_id]
+      ).catch(() => { /* not worth failing a request over */ });
     }
   } catch (e) {
     console.warn('[auth] session lookup failed:', e.message);
@@ -348,7 +393,7 @@ export async function verifyCode(req, res, next) {
     await query(
       `insert into sessions (id, account_id, token_hash, device_label, expires_at)
        values (gen_random_uuid(), $1, $2, $3, $4)`,
-      [accountId, sha256(token), deviceLabel(req), new Date(Date.now() + SESSION_TTL_MS)]
+      [accountId, sha256(token), deviceLabel(req), new Date(Date.now() + SESSION_IDLE_MS)]
     );
 
     setSessionCookie(req, res, token);
@@ -392,6 +437,60 @@ export async function logout(req, res, next) {
     res.json({ ok: true });
   } catch (err) {
     next(err);
+  }
+}
+
+/**
+ * End every session on this account, including this one.
+ *
+ * The control a person actually reaches for when a phone is lost, and the only
+ * answer to "someone has my token" that does not involve waiting thirty days. Every
+ * row is revoked rather than deleted, so the table still explains why six devices
+ * stopped working at the same minute.
+ *
+ * It requires a session, which is the right shape: this is not a recovery flow for
+ * an account you cannot get into, it is a broom for one you can.
+ */
+export async function logoutEverywhere(req, res, next) {
+  try {
+    const { rowCount } = await query(
+      `update sessions set revoked_at = now()
+        where account_id = $1 and revoked_at is null`,
+      [req.account.id]
+    );
+    res.clearCookie(COOKIE, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.secure || req.headers['x-forwarded-proto'] === 'https'
+    });
+    res.json({ ok: true, endedSessions: rowCount });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Rows nobody can use again.
+ *
+ * Sessions are kept for a month after they die - long enough to answer "why did that
+ * phone stop working" - and swept after that. Dead sign-in codes and yesterday's
+ * model-call counters go with them. Called on boot and once a day; a failure is
+ * logged and forgotten, because a table that is slightly too big is not an incident.
+ */
+export async function sweepExpired() {
+  try {
+    const sessions = await query(
+      `delete from sessions
+        where (revoked_at is not null and revoked_at < now() - interval '30 days')
+           or expires_at < now() - interval '30 days'`
+    );
+    const codes = await query("delete from login_codes where expires_at < now() - interval '1 day'");
+    const usage = await query("delete from ai_usage where window_start < now() - interval '2 days'");
+    const total = sessions.rowCount + codes.rowCount + usage.rowCount;
+    if (total > 0) console.log(`[auth] swept ${total} dead rows`);
+  } catch (e) {
+    console.warn('[auth] sweep failed:', e.message);
   }
 }
 

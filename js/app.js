@@ -676,6 +676,36 @@ async function doSignOut() {
 }
 
 /*
+ * Sign out of every device, from this one.
+ *
+ * Confirmed first, because it is the one control here that reaches other people's
+ * phones: doing it by accident means walking to a drawer to find the tablet it also
+ * signed out. `confirm` rather than a sheet - this is a yes or no on a destructive
+ * thing, which is exactly what the browser's own dialog is for, and a bespoke sheet
+ * would be a second thing to get wrong.
+ *
+ * A failure is SHOWN. Reporting "signed out everywhere" when the request never
+ * landed would tell someone their lost phone is locked out while it is still syncing.
+ */
+async function doSignOutEverywhere() {
+  const sure = window.confirm(
+    'Sign out on every device, including this one? '
+    + 'Your transactions stay on this phone. Each device has to sign in again.'
+  );
+  if (!sure) return;
+
+  try {
+    const out = await account.signOutEverywhere();
+    render();
+    const n = Number(out?.endedSessions || 0);
+    showSnack(n > 1 ? `Signed out on ${n} devices.` : 'Signed out everywhere.', null, null, 'sign-out');
+  } catch (err) {
+    showSnack(err.message || 'Could not reach the server. Nothing was signed out.',
+      null, null, 'warning-circle');
+  }
+}
+
+/*
  * A once-a-day reminder that nothing is backed up.
  *
  * Once a DAY, not once a session: this app is opened several times a day, and a
@@ -1252,6 +1282,7 @@ document.addEventListener('click', (e) => {
     }
     case 'sign-in': openSignIn(); break;
     case 'sign-out': doSignOut(); break;
+    case 'sign-out-all': doSignOutEverywhere(); break;
     case 'signin-back':
       signin = { ...signin, step: 'email', error: '', busy: false, sending: false };
       paintSignIn();

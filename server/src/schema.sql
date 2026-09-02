@@ -46,8 +46,10 @@ create table if not exists sessions (
   created_at   timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
   -- A session that is never used still stops working. Without this a token leaked
-  -- from a phone sold two years ago is valid forever.
-  expires_at   timestamptz not null default now() + interval '365 days',
+  -- from a phone sold two years ago is valid forever. Thirty days of NOT being used,
+  -- not thirty days total: auth.js pushes this forward while a device is in use, up
+  -- to the absolute ceiling it enforces from created_at.
+  expires_at   timestamptz not null default now() + interval '30 days',
   revoked_at   timestamptz
 );
 
@@ -71,6 +73,20 @@ create table if not exists login_codes (
   sent_at     timestamptz not null default now(),
   sent_count  integer not null default 1,
   created_at  timestamptz not null default now()
+);
+
+-- How many model calls an account has made in an hour, kept where a restart cannot
+-- forget it.
+--
+-- This lived in a Map in the process, which meant the cap reset on every deploy -
+-- and this service deploys often. A quota that forgets itself is a quota someone
+-- can wait out. One row per account per hour, incremented on the way in.
+create table if not exists ai_usage (
+  account_id   uuid not null references accounts(id) on delete cascade,
+  -- The hour this counts, from date_trunc. Rows older than a day are swept.
+  window_start timestamptz not null,
+  calls        integer not null default 0,
+  primary key (account_id, window_start)
 );
 
 -- ------------------------------------------------------------------- ledger

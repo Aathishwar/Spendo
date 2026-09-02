@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newDb } from 'pg-mem';
+import { withinQuotaForTest } from '../src/sync.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA = fs.readFileSync(path.join(HERE, '..', 'src', 'schema.sql'), 'utf8');
@@ -216,4 +217,73 @@ test('the opening figure for a month is upserted by the same rule', () => {
 
   const [row] = db.public.many(`select opening_amount from months where ym = '2026-08'`);
   assert.equal(Number(row.opening_amount), 25000);
+});
+
+/*
+ * The storage ceiling.
+ *
+ * These go through pg-mem's pg adapter rather than db.public, because withinQuota
+ * issues parameterised SQL against a client and the parameters are half of what is
+ * being checked - `= any($2)` over a list of ids is the query that decides whether a
+ * record is an insert or an edit.
+ */
+test('the storage ceiling refuses new records and still lets edits and deletes through', async () => {
+  const db = freshDb();
+  const { Pool } = db.adapters.createPg();
+  const client = new Pool();
+
+  for (const id of ['e_1', 'e_2', 'e_3']) pushEntry(db, ACCOUNT_A, entry({ id }));
+
+  const batch = [
+    // an edit to something already stored, and a delete, at an account that is full
+    { id: 'e_1', amount: 999 },
+    { id: 'e_2', deletedAt: '2026-09-01T00:00:00.000Z' },
+    // and two that would be new
+    { id: 'e_4' },
+    { id: 'e_5' }
+  ];
+
+  const out = await withinQuotaForTest(client, ACCOUNT_A, batch, {
+    table: 'expenses', column: 'id', max: 3, kind: 'entry'
+  });
+
+  assert.deepEqual(out.allowed.map((e) => e.id), ['e_1', 'e_2'],
+    'an edit or a delete was refused, which would trap a full account at its limit');
+  assert.deepEqual(out.refused.map((e) => e.id), ['e_4', 'e_5']);
+  assert.match(out.refused[0].reason, /limit of 3 entries/);
+
+  await client.end();
+});
+
+test('the storage ceiling lets a new record through while there is room', async () => {
+  const db = freshDb();
+  const { Pool } = db.adapters.createPg();
+  const client = new Pool();
+
+  pushEntry(db, ACCOUNT_A, entry({ id: 'e_1' }));
+
+  const out = await withinQuotaForTest(client, ACCOUNT_A, [{ id: 'e_2' }], {
+    table: 'expenses', column: 'id', max: 3, kind: 'entry'
+  });
+
+  assert.deepEqual(out.allowed.map((e) => e.id), ['e_2']);
+  assert.equal(out.refused.length, 0);
+
+  await client.end();
+});
+
+test("one account's records do not count against another's ceiling", async () => {
+  const db = freshDb();
+  const { Pool } = db.adapters.createPg();
+  const client = new Pool();
+
+  for (const id of ['e_1', 'e_2', 'e_3']) pushEntry(db, ACCOUNT_B, entry({ id }));
+
+  const out = await withinQuotaForTest(client, ACCOUNT_A, [{ id: 'e_1' }], {
+    table: 'expenses', column: 'id', max: 3, kind: 'entry'
+  });
+
+  assert.deepEqual(out.allowed.map((e) => e.id), ['e_1'], 'another account filled this one up');
+
+  await client.end();
 });

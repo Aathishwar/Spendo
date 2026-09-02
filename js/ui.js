@@ -574,6 +574,11 @@ function syncRows(sync) {
         </button>
         <button class="btn btn-text btn-sm" data-action="sign-out" type="button">Sign out</button>
       </div>
+      <p class="card-note">
+        Signing out leaves your transactions on this phone. Lost a device?
+        <button class="link-btn" data-action="sign-out-all" type="button">Sign out everywhere</button>
+        ends every session on this account, including this one.
+      </p>
     </div>`;
 }
 

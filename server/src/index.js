@@ -13,9 +13,9 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 
-import { assertConfigured, pool } from './db.js';
+import { assertConfigured, pool, query } from './db.js';
 import {
-  attachAccount, requireAccount, requestCode, verifyCode, me, logout
+  attachAccount, requireAccount, requestCode, verifyCode, me, logout, logoutEverywhere, sweepExpired
 } from './auth.js';
 import { mailConfigured } from './mail.js';
 import { aiConfigured, categorise, reviewMonth, spendingTips } from './ai.js';
@@ -206,6 +206,9 @@ app.get('/api/health', async (_req, res) => {
 app.post('/api/auth/request-code', requestCode);
 app.post('/api/auth/verify', verifyCode);
 app.post('/api/auth/logout', logout);
+// Ending every session needs a session: this is a broom for an account you are in,
+// not a recovery flow for one you are locked out of.
+app.post('/api/auth/logout-all', requireAccount, logoutEverywhere);
 app.get('/api/me', me);
 
 // Signed out is a supported way to use the app - the ledger lives in localStorage
@@ -216,27 +219,39 @@ app.post('/api/sync', requireAccount, sync);
 /* ---------------------------------------------------------------------- ai */
 
 /*
- * A crude per-account cap, in memory.
+ * A per-account cap on model calls, counted in the database.
  *
  * The point is not billing, it is that a signed-in session is a credential someone
- * could script: without this, one account can empty the quota for the app. It resets
- * on deploy, which is fine - the limit that protects a person is the one on their own
- * account, and losing it briefly costs a few calls.
+ * could script: without this, one account can empty the quota for the app.
+ *
+ * This used to be a Map in the process, which meant the count reset on every deploy
+ * - and this service deploys often, so the cap was one restart away from being no
+ * cap at all. It also cleared itself wholesale past 5000 keys, which anyone with
+ * that many accounts could trigger deliberately.
+ *
+ * One row per account per hour, incremented on the way in and read back in the same
+ * statement, so two requests racing cannot both see the last free slot. Rows older
+ * than a couple of days are swept with everything else.
  */
 const AI_LIMIT = Number(process.env.AI_CALLS_PER_HOUR || 200);
-const aiHits = new Map();
 
-function aiAllowed(accountId) {
-  const now = Date.now();
-  const hits = (aiHits.get(accountId) || []).filter((t) => now - t < 60 * 60 * 1000);
-  if (hits.length >= AI_LIMIT) {
-    aiHits.set(accountId, hits);
+async function aiAllowed(accountId) {
+  try {
+    const { rows } = await query(
+      `insert into ai_usage (account_id, window_start, calls)
+       values ($1, date_trunc('hour', now()), 1)
+       on conflict (account_id, window_start)
+       do update set calls = ai_usage.calls + 1
+       returning calls`,
+      [accountId]
+    );
+    return rows[0].calls <= AI_LIMIT;
+  } catch (e) {
+    // Closed, not open. A model call is the one thing here that costs money to a
+    // third party, and "the counter is unreachable" is not a reason to stop counting.
+    console.warn('[spendo] ai quota check failed, refusing the call:', e.message);
     return false;
   }
-  hits.push(now);
-  aiHits.set(accountId, hits);
-  if (aiHits.size > 5000) aiHits.clear();
-  return true;
 }
 
 /*
@@ -265,7 +280,7 @@ app.post('/api/categorise', requireAccount, async (req, res, next) => {
       res.json({ category: null, reason: 'not configured' });
       return;
     }
-    if (!aiAllowed(req.account.id)) {
+    if (!(await aiAllowed(req.account.id))) {
       res.status(429).json({ category: null, reason: 'too many requests' });
       return;
     }
@@ -295,7 +310,7 @@ app.post('/api/review', requireAccount, async (req, res, next) => {
       res.json({ text: null, reason: 'not configured' });
       return;
     }
-    if (!aiAllowed(req.account.id)) {
+    if (!(await aiAllowed(req.account.id))) {
       res.status(429).json({ text: null, reason: 'too many requests' });
       return;
     }
@@ -349,7 +364,7 @@ app.post('/api/tips', requireAccount, async (req, res, next) => {
       res.json({ tips: null, reason: 'not configured' });
       return;
     }
-    if (!aiAllowed(req.account.id)) {
+    if (!(await aiAllowed(req.account.id))) {
       res.status(429).json({ tips: null, reason: 'too many requests' });
       return;
     }
@@ -463,6 +478,15 @@ app.use((err, _req, res, _next) => {
 
 const server = app.listen(PORT, () => {
   console.log(`[spendo] listening on http://localhost:${PORT}`);
+  /*
+   * Dead sessions, dead codes and yesterday's quota counters, swept on boot and then
+   * once a day. `unref` so a sleeping timer never holds the process open through a
+   * shutdown, and the boot sweep is deliberately not awaited: the service is already
+   * listening, and tidying a table is not a reason to make anyone wait.
+   */
+  sweepExpired();
+  const daily = setInterval(sweepExpired, 24 * 60 * 60 * 1000);
+  daily.unref();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
