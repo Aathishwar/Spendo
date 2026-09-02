@@ -216,3 +216,98 @@ export async function reviewMonth(facts) {
 
   return text ? text.replace(/\s+/g, ' ').trim() : null;
 }
+
+/* -------------------------------------------------------------------- tips */
+
+/**
+ * Three suggested changes, from several months of figures.
+ *
+ * The same rule as the write-up, one step further: the model is given totals and is
+ * asked what to DO about them, never what they are. It is told the average for each
+ * category as well as this month's figure, because "Food is Rs 1,800 above its own
+ * usual" is a suggestion someone can act on and "Food is your biggest category" is
+ * an observation they already had.
+ *
+ * Answers come back as JSON. A model asked for prose returns three paragraphs that
+ * each have to be split and trimmed by hand, and the split is what breaks first when
+ * the wording changes; asking for a small object per suggestion means the failure is
+ * a parse error - loud, catchable, and answered with null - rather than a card with
+ * half a sentence in it.
+ */
+export async function spendingTips(facts) {
+  const lines = [
+    `Latest month: ${facts.ym}${facts.isCurrent ? ' (still running)' : ''}`,
+    `Spent this month: ${money(facts.spent)}`,
+    `Received this month: ${money(facts.received)}`,
+    `Left right now: ${money(facts.balance)}`,
+    `Average month over the last ${facts.monthsCovered}: ${money(facts.avgMonthly)}`
+  ];
+
+  if (facts.series?.length) {
+    lines.push('Month by month: ' + facts.series.map((m) => `${m.ym} ${money(m.spent)}`).join(', '));
+  }
+  if (facts.categories?.length) {
+    lines.push('This month by category, against what that category usually costs:');
+    for (const c of facts.categories) {
+      const move = c.usual > 0
+        ? `${money(Math.abs(c.delta))} ${c.delta >= 0 ? 'above' : 'below'} its usual ${money(c.usual)}`
+        : 'no earlier months to compare with';
+      lines.push(`- ${c.label}: ${money(c.amount)} (${Math.round(c.share * 100)}% of the month), ${move}`);
+    }
+  }
+
+  const text = await chat([
+    {
+      role: 'system',
+      content:
+        'You suggest where someone could spend less, from their own monthly figures. ' +
+        'Reply with JSON only: an array of exactly 3 objects, each {"title","detail"}. ' +
+        'No markdown, no code fence, no text outside the array. ' +
+        'title: under 6 words, names the change, not the category. ' +
+        'detail: one sentence under 30 words, quoting the figure it is based on. ' +
+        'Amounts in rupees, written like Rs 12,300, and only figures you were given. ' +
+        // Without this it produces the same three sentences for everybody - eat out
+        // less, cancel subscriptions, make a budget - which is advice about spending
+        // in general rather than about this person's spending.
+        'Base every suggestion on a category that is actually large or actually rose, ' +
+        'and say roughly what it would save a month. ' +
+        'Rank them: biggest realistic saving first. ' +
+        'Rent, Bills and Health are hard to cut - do not lead with them, and never ' +
+        'suggest skipping medical care. ' +
+        'Write to the person, plainly. No greeting, no moralising, no shame.'
+    },
+    { role: 'user', content: lines.join('\n') }
+  ], { maxTokens: 1400, temperature: 0.4 });
+
+  if (!text) return null;
+
+  /*
+   * Validated, not trusted, exactly as the category id is.
+   *
+   * A model told "JSON only" still occasionally wraps it in a fence or writes a line
+   * before it, so the array is cut out of whatever came back rather than the whole
+   * reply being handed to JSON.parse.
+   */
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start === -1 || end <= start) return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const tips = parsed
+    .filter((t) => t && typeof t === 'object')
+    .map((t) => ({
+      title: String(t.title || '').replace(/\s+/g, ' ').trim().slice(0, 60),
+      detail: String(t.detail || '').replace(/\s+/g, ' ').trim().slice(0, 240)
+    }))
+    .filter((t) => t.title && t.detail)
+    .slice(0, 3);
+
+  return tips.length ? tips : null;
+}

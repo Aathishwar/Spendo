@@ -445,7 +445,26 @@ button { font: inherit; color: inherit; }
   font-variant-numeric: tabular-nums;
 }
 
-.chart-hit { cursor: pointer; }
+/*
+ * The chart is tapped, not hovered. `touch-action: manipulation` keeps a tap from
+ * waiting on a double-tap-to-zoom that is not coming, which is what made the first
+ * touch version feel a beat late.
+ */
+.chart-hit { cursor: pointer; touch-action: manipulation; }
+
+/*
+ * A pinned day, said by stepping the other bars back rather than by colouring the
+ * chosen one. Opacity, not a second hue: the chart is one series, and a bar in a
+ * different colour would read as a different kind of day.
+ */
+.chart-bar { transition: opacity var(--dur-state) var(--ease); }
+.chart-daily.has-pin .chart-bar { opacity: 0.32; }
+.chart-daily.has-pin .chart-bar.is-active { opacity: 1; }
+.chart-hit.is-active { fill: var(--brand-tint); }
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-bar { transition: none; }
+}
 
 .chart-tip {
   position: absolute;
@@ -1026,6 +1045,61 @@ button { font: inherit; color: inherit; }
 
 /* Two low-emphasis choices under a primary button: back out, or try again. */
 .sheet-actions-row { display: flex; justify-content: space-between; gap: var(--space-2); }
+
+/* --------------------------------------------------------------- spend tips */
+
+/*
+ * Three suggestions, numbered.
+ *
+ * An ordered list, not a set of cards: they are ranked - biggest saving first - and a
+ * number is the cheapest way to say so. The numeral is drawn by the counter rather
+ * than by a marker so it can take the same tabular figures as every other number in
+ * the app and sit on the same baseline as the title beside it.
+ */
+.tips-list {
+  list-style: none;
+  counter-reset: tip;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+}
+
+.tip {
+  counter-increment: tip;
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 0 var(--space-2);
+}
+.tip::before {
+  content: counter(tip);
+  grid-row: 1 / span 2;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  color: var(--ink-3);
+  line-height: 1.45;
+}
+
+.tip-title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.tip-detail {
+  margin: 0;
+  font-size: var(--text-caption);
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* The card's own buttons sit under the list, not stretched across it: asking again is
+   a second-thought action, and a full-width button would read as the point of the card. */
+.tips-card .btn-row { margin-top: var(--space-1); }
 
 /* ---------------------------------------------------------- detail sheet */
 

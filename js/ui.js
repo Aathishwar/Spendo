@@ -12,7 +12,7 @@ import {
   monthLabelShort, monthShortOf, plural, signedMoney, timeAgo, todayISO, yesterdayISO
 } from './format.js';
 import { category, categoriesFor, seriesVar } from './categories.js';
-import { dailyBarsSVG, donutSVG, rowBarSVG } from './charts.js';
+import { dailyBarsSVG, donutSVG, monthlyBarsSVG, rowBarSVG } from './charts.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -318,7 +318,113 @@ export function screenHistory(ctx) {
     </button>`;
   }).join('');
 
-  return head + `<section class="list"><div class="group-rows">${rows}</div></section>`;
+  return head + trendCard(ctx.series) + tipsCard(ctx.tips) +
+    `<section class="list">
+      ${listHead('calendar-dots', 'Months')}
+      <div class="group-rows">${rows}</div>
+    </section>`;
+}
+
+/*
+ * Spending month by month, above the list it belongs to.
+ *
+ * The list already gives every month its own total; what it cannot do is show the
+ * shape of them together. Two months of data is the point at which a chart says
+ * anything at all, so below that this is left out rather than drawn as a single
+ * column with an average line through the top of it.
+ */
+function trendCard(series) {
+  const months = (series || []).filter((m) => m.spent > 0);
+  if (months.length < 2) return '';
+
+  const spends = months.map((m) => m.spent);
+  const average = spends.reduce((a, b) => a + b, 0) / spends.length;
+
+  return `
+    <section class="card chart-card">
+      <div class="card-head">
+        <h2 class="card-title">Spending over time</h2>
+        <span class="card-hint">${esc(money(Math.round(average)))} a month on average</span>
+      </div>
+      <div class="chart-wrap" data-chart="monthly">
+        ${monthlyBarsSVG(series)}
+        <div class="chart-tip" hidden></div>
+      </div>
+      ${monthTable(series)}
+    </section>`;
+}
+
+/** The same relief the daily chart offers: the figures as text, for anyone the chart fails. */
+function monthTable(series) {
+  const rows = series
+    .filter((m) => m.spent > 0)
+    .map((m) => `<tr><th scope="row">${esc(monthLabelShort(m.ym))}</th><td class="money">${esc(money(m.spent))}</td></tr>`)
+    .join('');
+  if (!rows) return '';
+  return `
+    <details class="table-toggle">
+      <summary>Show as table</summary>
+      <table class="data-table">
+        <caption class="sr-only">Spending per month</caption>
+        <thead><tr><th scope="col">Month</th><th scope="col">Spent</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </details>`;
+}
+
+/*
+ * Three suggestions, asked for rather than pushed.
+ *
+ * It is a button and not something that runs on load, for two reasons. Advice nobody
+ * asked for is nagging, and this is the one screen where a person is already looking
+ * at what they spent - so the moment they want it is a moment they can choose. It
+ * also costs a model call, and a call made on every visit to a tab is a quota spent
+ * on people who were only passing through.
+ *
+ * The figures behind it are on the device and are already on this screen. What the
+ * model adds is the sentence, and if it cannot be reached the screen loses nothing
+ * it had before.
+ */
+function tipsCard(tips) {
+  const t = tips || {};
+
+  const body = () => {
+    if (t.busy) {
+      return `<p class="card-note">Reading your last few months...</p>`;
+    }
+    if (t.items && t.items.length) {
+      return `
+        <ol class="tips-list">
+          ${t.items.map((item) => `
+            <li class="tip">
+              <p class="tip-title">${esc(item.title)}</p>
+              <p class="tip-detail">${esc(item.detail)}</p>
+            </li>`).join('')}
+        </ol>
+        <div class="btn-row">
+          <button class="btn btn-text" data-action="get-tips" type="button">Suggest again</button>
+        </div>`;
+    }
+    if (!t.possible) {
+      return `<p class="card-note">Sign in to have your last few months read and three changes suggested.</p>`;
+    }
+    return `
+      <p class="card-note">${t.error
+        ? esc(t.error)
+        : 'Your monthly totals and category splits are read, and three specific changes come back. No description ever leaves the device.'}</p>
+      <div class="btn-row">
+        <button class="btn btn-primary" data-action="get-tips" type="button">Suggest where to cut</button>
+      </div>`;
+  };
+
+  return `
+    <section class="card tips-card">
+      <div class="card-head">
+        <h2 class="card-title">Where to cut</h2>
+        ${t.items && t.items.length && t.ym ? `<span class="card-hint">from ${esc(monthLabelShort(t.ym))} and before</span>` : ''}
+      </div>
+      ${body()}
+    </section>`;
 }
 
 export function screenInsights(ctx) {
@@ -809,9 +915,28 @@ function pickedNote(picked) {
   return from ? `<span class="field-hint">Picked ${esc(from)}</span>` : '';
 }
 
+/*
+ * The chosen category first, then the rest in their declared order.
+ *
+ * There are thirteen of these and a phone shows four. Left in fixed order, a pick of
+ * "Personal care" sat off the right edge of a scroller that opens at the left, so the
+ * one chip that matters was the one chip not on screen - and scrolling it into view
+ * only moved the problem, leaving everything before it behind the left edge to be
+ * swiped back to. Putting it at the front means the row can always open at position
+ * zero: the answer is under the thumb and nothing is hidden to the left of it.
+ *
+ * Only the FRONT moves. The rest keep the order in categories.js, so the row is not
+ * reshuffled by frequency or by rank and a category stays where it was learnt.
+ */
+function orderedCats(cats, chosen) {
+  const pick = cats.find((c) => c.id === chosen);
+  return pick ? [pick, ...cats.filter((c) => c.id !== chosen)] : cats;
+}
+
 export function addSheet({ direction, category: catId, date, amount, description, suggestions, picked }) {
-  const cats = categoriesFor(direction);
-  const chosen = catId || cats[0].id;
+  const all = categoriesFor(direction);
+  const chosen = catId || all[0].id;
+  const cats = orderedCats(all, chosen);
 
   return `
     <form class="sheet-body" id="add-form" novalidate>
@@ -878,7 +1003,10 @@ export function addSheet({ direction, category: catId, date, amount, description
 export function detailSheet(e, editing) {
   const cat = category(e.category);
   const income = e.direction === 'in';
-  const cats = categoriesFor(e.direction);
+  // The row this entry already sits in opens with its own category first, for the
+  // same reason the add sheet does: the chip you are most likely to want is the one
+  // you can see without scrolling.
+  const cats = orderedCats(categoriesFor(e.direction), e.category);
 
   const readRow = (key, label, valueHtml) => `
     <div class="field-row">

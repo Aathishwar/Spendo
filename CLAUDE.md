@@ -609,12 +609,30 @@ inferrable from four letters, so it is an explicit override.
 |---|---|---|
 | `/api/categorise` | the description text, the list of category ids | amount, date, history, anything else |
 | `/api/review` | totals, category shares and labels, last month's total | any description, any date, any individual transaction |
+| `/api/tips` | monthly totals over the window, and per category what was spent against what that category usually costs | any description, any date, any individual transaction |
 
-The `/api/review` body is rebuilt field by field on the server rather than passed
-through, so whatever else a caller puts in it does not reach the model. Both routes
-require a session and are capped per account per hour: a signed-in session is a
-credential someone could script, and without the cap one account can empty the quota
-for the app.
+The `/api/review` and `/api/tips` bodies are rebuilt field by field on the server
+rather than passed through, so whatever else a caller puts in it does not reach the
+model. All three routes require a session and are capped per account per hour: a
+signed-in session is a credential someone could script, and without the cap one
+account can empty the quota for the app.
+
+**Suggestions are asked for, never pushed.** `/api/tips` is behind a button on
+History, because advice nobody asked for is nagging, and because a call made on every
+visit to a tab is quota spent on people who were only passing through. The answer
+comes back as JSON - three `{title, detail}` objects - and is parsed, shape-checked
+and truncated before it is rendered; a reply that is prose rather than an array is
+answered with `null` and the card says it could not get suggestions. Prose would have
+had to be split by hand, and the split is the thing that breaks first when the wording
+changes.
+
+**The prompt is told what each category usually costs, not just what it cost.**
+Without the comparison the model returns the same three suggestions for everybody -
+eat out less, cancel a subscription, make a budget - which is advice about spending in
+general rather than about this person's spending. With it, a suggestion can say "Food
+is Rs 1,290 above its own usual", which is a fact the reader can check on the screen
+above it. Rent, Bills and Health are named in the prompt as hard to cut, so they are
+not led with, and skipping medical care is never suggested.
 
 ### Not used for
 

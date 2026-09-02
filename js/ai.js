@@ -12,6 +12,9 @@
  *                no amount, no date, no history, no account id in the body.
  *   review       figures only. Totals, category shares, last month's total. No
  *                description, no date, no individual transaction ever.
+ *   tips         figures only, over several months: monthly totals, and per category
+ *                what was spent against what is usual. Same rule - no description,
+ *                no date, no single transaction.
  */
 
 import { isSignedIn } from './identity.js';
@@ -64,4 +67,25 @@ export async function suggestCategory(description, categories) {
 export async function writeReview(facts) {
   const out = await post('/api/review', { facts }, 20000);
   return out?.text || null;
+}
+
+/**
+ * Three suggested changes, from several months of figures, or null.
+ *
+ * Longer deadline than the write-up because there is more to read and three answers
+ * to give, and because nothing is waiting on it: the button says what it is doing and
+ * the rest of the screen is already usable.
+ *
+ * Shape-checked here as well as on the server. The screen renders whatever comes back,
+ * so a malformed item is a broken card, and a broken card is worse than no card.
+ */
+export async function suggestTips(facts) {
+  const out = await post('/api/tips', { facts }, 30000);
+  const items = Array.isArray(out?.tips) ? out.tips : [];
+  const clean = items
+    .filter((t) => t && typeof t.title === 'string' && typeof t.detail === 'string')
+    .map((t) => ({ title: t.title.trim(), detail: t.detail.trim() }))
+    .filter((t) => t.title && t.detail)
+    .slice(0, 3);
+  return clean.length ? clean : null;
 }

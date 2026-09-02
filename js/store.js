@@ -31,7 +31,10 @@ const EMPTY = {
   // is a fingerprint of the figures it was written from, so an edit to an old month
   // invalidates it rather than leaving a paragraph that quietly disagrees with the
   // numbers beside it.
-  reviews: {}
+  reviews: {},
+  // { items, stamp, madeAt }. The last set of spending suggestions. One set, not one
+  // per month: they are advice about a habit, and the habit is not a calendar month.
+  tips: null
 };
 
 let state = load();
@@ -278,6 +281,134 @@ export function categoryTotals(ym) {
   return [...totals.entries()]
     .map(([id_, amount]) => ({ id: id_, amount, share: spent > 0 ? amount / spent : 0 }))
     .sort((a, b) => b.amount - a.amount);
+}
+
+/* ------------------------------------------------------------ over time */
+
+/**
+ * Spending per month, oldest first, for the History chart.
+ *
+ * Months with no entries are still returned when they fall inside the window: a gap
+ * in a run of months is a fact about the months, and a chart that silently closes the
+ * gap makes two Januaries look adjacent.
+ *
+ * `limit` counts back from the newest month that exists, not from today, so an old
+ * export still draws its own history rather than a year of empty columns.
+ */
+export function monthlySeries(limit = 12) {
+  const known = months();                       // newest first
+  if (!known.length) return [];
+
+  const newest = known[0];
+  const oldest = known[known.length - 1];
+  const out = [];
+
+  let ym = newest;
+  for (let i = 0; i < limit; i++) {
+    const stats = monthStats(ym);
+    out.push({
+      ym,
+      spent: stats.spent,
+      received: stats.received,
+      count: stats.count,
+      isCurrent: stats.isCurrent,
+      closed: stats.closed
+    });
+    if (ym === oldest) break;
+    ym = shiftYMBack(ym);
+  }
+  return out.reverse();
+}
+
+/**
+ * The figures a model is given to suggest where spending could come down.
+ *
+ * Figures only, exactly as with the month write-up: monthly totals, category totals
+ * over the window, and how each category moved against its own average. No
+ * description, no date, no single transaction ever leaves the device here - the
+ * advice is about categories and amounts, and it does not need to know that Tuesday's
+ * Rs 240 was a haircut.
+ *
+ * `recent` is the newest complete-enough month to reason about: the current month is
+ * used when it is, itself, the thing the reader is trying to change.
+ */
+export function spendingProfile(window = 6) {
+  const series = monthlySeries(window);
+  if (!series.length) return null;
+
+  const recent = series[series.length - 1];
+  const past = series.slice(0, -1);
+  const monthsWithSpending = series.filter((m) => m.spent > 0);
+  const avgMonthly = monthsWithSpending.length
+    ? monthsWithSpending.reduce((n, m) => n + m.spent, 0) / monthsWithSpending.length
+    : 0;
+
+  // Per category: this month, and the average of the months before it. The pair is
+  // what makes a suggestion specific - "Food is Rs 2,000 above its own usual" says
+  // something that "Food is your biggest category" does not.
+  const recentByCat = new Map(categoryTotals(recent.ym).map((t) => [t.id, t.amount]));
+  const historyByCat = new Map();
+  for (const m of past) {
+    for (const t of categoryTotals(m.ym)) {
+      historyByCat.set(t.id, (historyByCat.get(t.id) || 0) + t.amount);
+    }
+  }
+
+  const ids = new Set([...recentByCat.keys(), ...historyByCat.keys()]);
+  const categories = [...ids].map((id) => {
+    const now = recentByCat.get(id) || 0;
+    const usual = past.length ? (historyByCat.get(id) || 0) / past.length : 0;
+    return {
+      id,
+      amount: now,
+      share: recent.spent > 0 ? now / recent.spent : 0,
+      usual,
+      delta: now - usual
+    };
+  }).sort((a, b) => b.amount - a.amount);
+
+  const stats = monthStats(recent.ym);
+
+  return {
+    ym: recent.ym,
+    isCurrent: recent.isCurrent,
+    spent: recent.spent,
+    received: recent.received,
+    balance: stats.balance,
+    avgMonthly,
+    monthsCovered: series.length,
+    series: series.map((m) => ({ ym: m.ym, spent: m.spent })),
+    categories: categories.slice(0, 8)
+  };
+}
+
+/**
+ * A fingerprint of what advice was given for, so it is thrown away when the figures
+ * it was based on move. Same idea as reviewStamp, and for the same reason: advice
+ * that quietly disagrees with the numbers under it is worse than no advice.
+ */
+function tipsStamp(profile) {
+  if (!profile) return 'none';
+  return [
+    profile.ym,
+    Math.round(profile.spent),
+    ...profile.categories.map((c) => `${c.id}:${Math.round(c.amount)}`)
+  ].join('|');
+}
+
+/** The stored suggestions, or null if there are none or they are out of date. */
+export function tipsHeld() {
+  const held = state.tips;
+  if (!held || !Array.isArray(held.items) || !held.items.length) return null;
+  return held.stamp === tipsStamp(spendingProfile()) ? held : null;
+}
+
+export function setTips(items) {
+  const profile = spendingProfile();
+  // The month the advice was read from is kept with it, so the card can say what it
+  // was looking at. Advice with no date on it is advice you cannot judge.
+  state.tips = { items, ym: profile ? profile.ym : null, stamp: tipsStamp(profile), madeAt: Date.now() };
+  commit();
 }
 
 /** Descriptions used before, most recent first, for the add sheet's suggestions. */

@@ -51,7 +51,7 @@ const KEYWORDS = {
   ],
   transport: [
     'petrol', 'diesel', 'fuel', 'gas', 'uber', 'ola', 'rapido', 'auto', 'cab',
-    'taxi', 'bus', 'train', 'metro', 'irctc', 'flight', 'ticket', 'toll', 'parking',
+    'taxi', 'bus', 'train', 'metro', 'irctc', 'ticket', 'toll', 'parking',
     'service', 'puncture', 'tyre', 'bike', 'car', 'scooter', 'hp', 'iocl', 'bpcl',
     'indianoil', 'shell', 'fastag'
   ],
@@ -68,7 +68,7 @@ const KEYWORDS = {
     'insurance', 'premium', 'emi', 'loan', 'maintenance', 'society', 'tax'
   ],
   shopping: [
-    'amazon', 'flipkart', 'myntra', 'ajio', 'meesho', 'nykaa', 'shirt', 'tshirt',
+    'amazon', 'flipkart', 'myntra', 'ajio', 'meesho', 'shirt', 'tshirt',
     'jeans', 'shoes', 'chappal', 'dress', 'saree', 'clothes', 'bag', 'watch',
     'headphones', 'charger', 'cable', 'mobile', 'laptop', 'decathlon', 'ikea',
     'furniture', 'gift'
@@ -79,10 +79,61 @@ const KEYWORDS = {
     'test', 'lab', 'dental', 'dentist', 'gym', 'physio', 'tablets'
   ],
   rent: ['rent', 'lease', 'deposit', 'advance', 'landlord', 'pg', 'hostel'],
+  /*
+   * Streaming names and 'trip' used to live here, which is how a Goa trip came back
+   * as Entertainment and a Netflix renewal sat beside a cinema ticket. A one-off
+   * outing is entertainment; a recurring charge is a subscription and a journey is
+   * travel, and those are three different questions at the end of a month.
+   */
   fun: [
-    'movie', 'cinema', 'pvr', 'inox', 'netflix', 'prime', 'hotstar', 'spotify',
-    'youtube', 'game', 'games', 'steam', 'concert', 'trip', 'outing', 'party',
-    'bar', 'pub', 'beer', 'club', 'zoo', 'museum', 'park'
+    'movie', 'cinema', 'pvr', 'inox', 'game', 'games', 'steam', 'concert',
+    'party', 'bar', 'pub', 'beer', 'club', 'zoo', 'museum', 'park', 'bowling',
+    'arcade', 'amusement', 'theatre', 'gig', 'standup', 'comedy'
+  ],
+  /*
+   * Places are keywords too. A description is far more often "goa trip" or "ooty
+   * with amma" than it is "travel", and a place name is the single strongest signal
+   * in either. Only destinations - a city someone lives in is not evidence of a
+   * journey, so no metros here.
+   */
+  travel: [
+    'travel', 'trip', 'tour', 'vacation', 'holiday', 'outing', 'getaway',
+    'flight', 'flights', 'airport', 'airlines', 'indigo', 'vistara', 'spicejet',
+    'akasa', 'boarding', 'luggage', 'visa', 'passport',
+    'makemytrip', 'mmt', 'goibibo', 'ixigo', 'cleartrip', 'yatra', 'redbus',
+    'oyo', 'airbnb', 'resort', 'homestay', 'lodge', 'guesthouse', 'stay',
+    'sightseeing', 'trek', 'trekking', 'camping', 'beach', 'hillstation',
+    'goa', 'manali', 'ooty', 'kodaikanal', 'kodai', 'munnar', 'pondicherry',
+    'pondy', 'kerala', 'shimla', 'kashmir', 'wayanad', 'coorg', 'yercaud',
+    'rishikesh', 'ladakh', 'andaman', 'darjeeling', 'jaipur', 'udaipur'
+  ],
+  /*
+   * A recurring charge, separated from Bills because they answer different
+   * questions: a bill is the cost of living somewhere, a subscription is a decision
+   * that can be reversed on a bad month. 'apple', 'plan' and 'drive' are deliberately
+   * absent - one is a fruit, and the other two are words people use for other things.
+   */
+  subs: [
+    'subscription', 'subscriptions', 'renewal', 'renew', 'renewed', 'membership',
+    'netflix', 'prime', 'hotstar', 'jiohotstar', 'sonyliv', 'zee5', 'aha',
+    'spotify', 'gaana', 'wynk', 'youtube', 'audible', 'kindle',
+    'icloud', 'dropbox', 'onedrive', 'chatgpt', 'openai', 'claude', 'midjourney',
+    'canva', 'adobe', 'notion', 'figma', 'github', 'patreon', 'substack'
+  ],
+  education: [
+    'fee', 'fees', 'tuition', 'tution', 'coaching', 'course', 'courses',
+    'class', 'classes', 'exam', 'exams', 'semester', 'admission', 'college',
+    'school', 'university', 'institute', 'tutor', 'syllabus', 'library',
+    'books', 'notebook', 'textbook', 'stationery', 'stationary', 'xerox',
+    'printout', 'udemy', 'coursera', 'byjus', 'unacademy', 'vedantu',
+    'upsc', 'neet', 'jee', 'gate', 'certification', 'workshop'
+  ],
+  care: [
+    'salon', 'saloon', 'haircut', 'barber', 'parlour', 'parlor', 'spa',
+    'grooming', 'shave', 'shaving', 'waxing', 'threading', 'facial',
+    'manicure', 'pedicure', 'nails', 'massage', 'cosmetics', 'makeup',
+    'skincare', 'moisturiser', 'moisturizer', 'sunscreen', 'shampoo', 'soap',
+    'perfume', 'deodorant', 'deo', 'razor', 'trimmer', 'nykaa'
   ],
   salary: ['salary', 'stipend', 'wages', 'payroll', 'credited', 'incentive', 'bonus'],
   refund: ['refund', 'refunded', 'return', 'returned', 'cashback', 'reversal', 'settled'],
@@ -223,10 +274,27 @@ export function guess(description, direction = 'out') {
     if (n / total >= 0.6) return { category: best, source: 'history' };
   }
 
-  // 2. The cold-start table.
-  for (const w of ws) {
+  /*
+   * 2. The cold-start table, read as a vote rather than as a race.
+   *
+   * This used to return on the FIRST word that hit the table, which made the answer
+   * depend on word order instead of on evidence: "goa trip food" answered travel and
+   * "food in goa trip" answered food, from the same three words. Counting every hit
+   * and taking the highest is stable under rewording, and a description that names
+   * two categories once each still resolves - to whichever was said first, which is
+   * usually the thing and not the qualifier.
+   */
+  const kw = new Map();
+  ws.forEach((w, i) => {
     const id = KEYWORD_INDEX.get(w);
-    if (id && allowed.has(id)) return { category: id, source: 'keyword' };
+    if (!id || !allowed.has(id)) return;
+    const hit = kw.get(id) || { n: 0, at: i };
+    hit.n += 1;
+    kw.set(id, hit);
+  });
+  if (kw.size) {
+    const [best] = [...kw].sort((a, b) => b[1].n - a[1].n || a[1].at - b[1].at);
+    return { category: best[0], source: 'keyword' };
   }
 
   return null;

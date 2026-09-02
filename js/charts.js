@@ -5,6 +5,8 @@
  *
  *   dailyBarsSVG   one series over time, so: columns, one hue, no legend. The title
  *                  above it names the series, which is what a legend would have said.
+ *   monthlyBarsSVG the same form one step coarser, for History: one column a month
+ *                  with the average across the window as the reference line.
  *   donutSVG       part-to-whole across categories, with the ranked list below it
  *                  doing the work a legend would do.
  *
@@ -16,7 +18,7 @@
  * segment of the share bar is printed with its name and amount in the list below it.
  */
 
-import { money } from './format.js';
+import { money, monthLabelShort } from './format.js';
 import { seriesVar } from './categories.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -81,16 +83,20 @@ export function dailyBarsSVG(stats) {
     const x = i * slot + gap / 2;
     const future = stats.isCurrent && day > stats.dayNow;
 
+    // data-day on the mark itself, not only on the hit target: picking a day dims
+    // every other bar, and the dimming is done by finding this attribute.
     if (value > 0) {
       const top = y(value);
       bars.push(
-        `<path d="${columnPath(x, top, barW, PLOT_BOTTOM - top, 4)}" fill="var(--brand)"/>`
+        `<path class="chart-bar" data-day="${day}" ` +
+        `d="${columnPath(x, top, barW, PLOT_BOTTOM - top, 4)}" fill="var(--brand)"/>`
       );
     } else {
       // A day with no spending still exists. A 2px stub says "nothing here" where a
       // missing bar would have said "no such day".
       bars.push(
-        `<rect x="${x.toFixed(1)}" y="${PLOT_BOTTOM - 2}" width="${barW.toFixed(1)}" height="2" rx="1" ` +
+        `<rect class="chart-bar" data-day="${day}" x="${x.toFixed(1)}" y="${PLOT_BOTTOM - 2}" ` +
+        `width="${barW.toFixed(1)}" height="2" rx="1" ` +
         `fill="var(--line)" opacity="${future ? 0.5 : 1}"/>`
       );
     }
@@ -129,7 +135,8 @@ export function dailyBarsSVG(stats) {
   }
 
   // Hit targets are the full column height, always at least the slot width, so a
-  // thumb can reach a 3px bar.
+  // thumb can reach a 3px bar. They are tapped, not only hovered: see bindChart in
+  // app.js, where a tap pins the day's figure until it is dismissed.
   for (let i = 0; i < days; i++) {
     parts.push(
       `<rect class="chart-hit" data-day="${i + 1}" x="${(i * slot).toFixed(1)}" y="0" ` +
@@ -139,6 +146,116 @@ export function dailyBarsSVG(stats) {
 
   return `<svg class="chart-daily" viewBox="0 0 ${W} ${H}" role="img" ` +
     `aria-label="Daily spending for the month, with the even daily budget marked">${parts.join('')}</svg>`;
+}
+
+/**
+ * Spending per month, for History.
+ *
+ * The same marks as the daily chart, one step coarser, because it answers the same
+ * question over a longer run: is this month like the others. Deliberately NOT a line
+ * chart - a line reads as a continuous quantity sampled over time, and a month's
+ * spending is a total that exists only once the month is over. Columns say "these are
+ * twelve separate sums" where a line would draw a slope between two of them and
+ * invite the reader to believe in the middle of it.
+ *
+ * The reference line is the average of the months that had any spending, so a run of
+ * empty months at the start of a ledger does not drag it to nothing.
+ */
+export function monthlyBarsSVG(series) {
+  const W = 320;
+  const PLOT_TOP = 16;
+  const PLOT_BOTTOM = 96;
+  const AXIS_Y = 112;
+  const H = 120;
+
+  if (!series.length) return '';
+
+  const n = series.length;
+  const slot = W / n;
+  const gap = Math.min(8, Math.max(3, slot * 0.28));
+  const barW = Math.max(4, slot - gap);
+
+  const spends = series.map((m) => m.spent);
+  const peak = Math.max(...spends, 0);
+  const withSpending = spends.filter((v) => v > 0);
+  const average = withSpending.length ? withSpending.reduce((a, b) => a + b, 0) / withSpending.length : 0;
+  const scaleMax = Math.max(peak, average, 1) * 1.15;
+  const y = (v) => PLOT_BOTTOM - (v / scaleMax) * (PLOT_BOTTOM - PLOT_TOP);
+
+  const parts = [];
+  const bars = [];
+
+  if (average > 0) {
+    const ay = y(average);
+    parts.push(
+      `<line x1="0" y1="${ay.toFixed(1)}" x2="${W}" y2="${ay.toFixed(1)}" ` +
+      `stroke="var(--ink-3)" stroke-width="2" stroke-dasharray="2 4" opacity="0.55"/>`
+    );
+  }
+
+  series.forEach((m, i) => {
+    const x = i * slot + gap / 2;
+    if (m.spent > 0) {
+      const top = y(m.spent);
+      bars.push(
+        `<path class="chart-bar" data-day="${i + 1}" ` +
+        `d="${columnPath(x, top, barW, PLOT_BOTTOM - top, 4)}" fill="var(--brand)"/>`
+      );
+    } else {
+      // A month that exists and holds nothing is not the same as a month that is not
+      // in the ledger, and both are in this series. The stub is the difference.
+      bars.push(
+        `<rect class="chart-bar" data-day="${i + 1}" x="${x.toFixed(1)}" y="${PLOT_BOTTOM - 2}" ` +
+        `width="${barW.toFixed(1)}" height="2" rx="1" fill="var(--line)"/>`
+      );
+    }
+  });
+
+  parts.push(`<g class="chart-bars">${bars.join('')}</g>`);
+
+  // One direct label, on the biggest month, for the same reason the daily chart has
+  // one: a number on every column at this width is a wall of digits.
+  const peakIndex = spends.indexOf(peak);
+  if (peak > 0) {
+    const x = peakIndex * slot + slot / 2;
+    const anchor = x < 40 ? 'start' : x > W - 40 ? 'end' : 'middle';
+    const tx = anchor === 'start' ? 2 : anchor === 'end' ? W - 2 : x;
+    parts.push(
+      `<text x="${tx.toFixed(1)}" y="${(y(peak) - 5).toFixed(1)}" text-anchor="${anchor}" ` +
+      `class="chart-peak">${esc(money(peak))}</text>`
+    );
+  }
+
+  /*
+   * Month initials, thinned until they fit rather than rotated. A tick under every
+   * month is unreadable at 26px of slot, and turning the labels on their side to make
+   * room asks the reader to turn their head to read an axis.
+   */
+  const every = slot >= 34 ? 1 : slot >= 24 ? 2 : 3;
+  series.forEach((m, i) => {
+    if (i % every !== 0 && i !== n - 1) return;
+    const x = i * slot + slot / 2;
+    const anchor = i === 0 && n > 1 ? 'start' : i === n - 1 && n > 1 ? 'end' : 'middle';
+    const tx = anchor === 'start' ? 0 : anchor === 'end' ? W : x;
+    parts.push(
+      `<text x="${tx.toFixed(1)}" y="${AXIS_Y}" text-anchor="${anchor}" class="chart-tick">` +
+      `${esc(monthLabelShort(m.ym).split(' ')[0])}</text>`
+    );
+  });
+
+  // Full-height hit targets, so a thumb reaches a month whatever its bar is doing.
+  // `data-day` is the index, not a date: app.js pins by position and looks the month
+  // up in the same series it was drawn from.
+  series.forEach((m, i) => {
+    parts.push(
+      `<rect class="chart-hit" data-day="${i + 1}" x="${(i * slot).toFixed(1)}" y="0" ` +
+      `width="${slot.toFixed(1)}" height="${PLOT_BOTTOM}" fill="transparent"/>`
+    );
+  });
+
+  return `<svg class="chart-daily chart-monthly" viewBox="0 0 ${W} ${H}" role="img" ` +
+    `aria-label="Spending per month over the last ${n} months, with the average marked">` +
+    `${parts.join('')}</svg>`;
 }
 
 /**

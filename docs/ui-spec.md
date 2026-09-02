@@ -115,6 +115,16 @@ Top to bottom:
    a list of months and an entry has to land in one of them; on Insights and Settings adding
    is not the action of the screen.
 
+**Spending per day** sits between the balance card and the list, one bar per day of the
+month with the even-spread budget drawn under them as a dashed reference line. Tapping a day
+pins its date and figure in a tip above the chart and drops every other bar to 32%; tapping
+the same day again, or anywhere off the chart, clears it. It is a pin rather than a hover
+because hover is not a gesture a phone has - the first version showed the figure on
+`pointermove` and hid it on `pointerleave`, and a touch fires both, so on a phone the readout
+appeared and vanished inside the same tap. A mouse still gets the hover preview, but only
+while nothing is pinned. Nothing about the pin survives a re-render: it is a reading of the
+chart, not a setting.
+
 Long-press or swipe-left on a row reveals delete. Delete is optimistic with a 6 second
 undo snackbar, because that is what the old `/undo` command was for and an undo that lives
 in the moment beats a command you have to remember.
@@ -124,6 +134,26 @@ in the moment beats a command you have to remember.
 A list of months. Each row: month name and year, total spent, closing balance, and a state
 chip when the month is closed. Tapping a month opens the Home layout scoped to that month,
 read-only for closed months.
+
+Above the list, two cards.
+
+1. **Spending over time**, one column a month for up to twelve months, with the average of
+   the months that had any spending as the dashed reference line. Columns and not a line:
+   a line reads as a continuous quantity sampled over time, and a month's spending is a
+   total that exists only once the month is over, so a slope drawn between two of them
+   invites the reader to believe in the middle of it. A month in the window with nothing in
+   it keeps its slot as a 2px stub - a gap in a run of months is a fact about the months,
+   and closing it up would make two Januaries look adjacent. Tap a column to pin its figure,
+   the same gesture as the daily chart on Home. Below two months of data the card is left
+   out rather than drawn as one column with an average line through the top of it.
+2. **Where to cut**, three suggestions behind a button. The figures are on the device and
+   are already on this screen; what the model adds is the sentence. It is asked for rather
+   than run on arrival, because advice nobody asked for is nagging and because this is the
+   one screen where a person is already looking at what they spent. Suggestions are stored
+   stamped with the figures they came from, so they survive a reload and are thrown away
+   the moment an edit moves the numbers under them. Signed out, the card says so and does
+   nothing else; unreachable, it says it could not get suggestions and the screen loses
+   nothing it had before.
 
 ### 3. Insights
 
@@ -150,8 +180,11 @@ read-only for closed months.
 Categories are the reason this screen can exist. The n8n workflow had none, so the old
 monthly report grouped by exact description text, which produced a "category" per typo.
 
-The colours are the eight validated categorical slots from `tokens.css`, assigned by identity
-and never by rank, so a category keeps its colour whatever it does this month.
+The colours are the twelve validated categorical slots from `tokens.css`, assigned by identity
+and never by rank, so a category keeps its colour whatever it does this month. Twelve is past
+the point where colour alone separates every pair for a reader with CVD, which is why the
+ranked list under the donut always prints the name, the amount and the share: the slots make
+the chart scannable, the list makes it readable.
 
 ### 4. Settings
 

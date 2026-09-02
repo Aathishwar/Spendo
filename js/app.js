@@ -24,6 +24,13 @@ const sheet = document.getElementById('sheet');
 const sheetContent = document.getElementById('sheet-content');
 const snack = document.getElementById('snack');
 
+/*
+ * How far back History looks. A year is the window in which a month can be compared
+ * with the same month last year, and it is also about as many columns as 320px can
+ * carry before the ticks have to be thinned to every third one.
+ */
+const TREND_MONTHS = 12;
+
 let tab = 'today';
 let ym = currentYM();
 let pendingUndo = null;
@@ -115,7 +122,11 @@ function render({ animate = false } = {}) {
     sync: sync.syncStatus(),
     install: installState(),
     search,
-    sliceId
+    sliceId,
+    // History only. Both of these walk every month in the ledger, and there is no
+    // reason to pay for that while looking at Home.
+    series: tab === 'history' ? store.monthlySeries(TREND_MONTHS) : [],
+    tips: tab === 'history' ? tipsState() : null
   };
   ctx.searchResult = runSearch(ctx.entries, search.query);
 
@@ -273,6 +284,21 @@ function filterSuggestions(form) {
     return pa - pb || rank(a) - rank(b);
   });
   for (const chip of ordered) row.append(chip);
+
+  /*
+   * Back to the start of the row, because the row is a horizontal scroller and
+   * reordering its children does not move it.
+   *
+   * This is the bug that made the whole feature look broken: type a few more
+   * letters, the best match is moved to position 0 - and position 0 is off the left
+   * edge of a row still scrolled to wherever the last look through the recents left
+   * it. The match was being computed correctly and then parked out of sight, so the
+   * only way to see the suggestion was to scroll back by hand.
+   *
+   * Set, not animated: the content under the finger has already changed, and
+   * sliding to it would draw a scroll the user did not ask for on every keystroke.
+   */
+  if (row.scrollLeft !== 0) row.scrollLeft = 0;
 }
 
 /* --------------------------------------------------------- category guessing */
@@ -352,6 +378,25 @@ async function askServer(description) {
 }
 
 /**
+ * Move a chip to the front of its row and open the row at the front.
+ *
+ * Scrolling it into view was the first attempt and it was half a fix: the chip was on
+ * screen, but everything before it was now behind the left edge, so seeing the rest of
+ * the categories meant swiping back. Moving the node instead means the row can sit at
+ * `scrollLeft: 0` - the picked category is the first thing under the thumb and every
+ * other one is a swipe RIGHT, in the direction the row already scrolls.
+ *
+ * The node is moved rather than the sheet re-rendered, because re-rendering the sheet
+ * replaces the description input and takes the keyboard away mid-word.
+ */
+function frontChip(chip) {
+  const row = chip.closest('.chip-row');
+  if (!row) return;
+  if (row.firstElementChild !== chip) row.prepend(chip);
+  row.scrollLeft = 0;
+}
+
+/**
  * Select a chip without re-rendering the sheet.
  *
  * Re-rendering would replace the description input and take the keyboard away
@@ -366,11 +411,19 @@ function applyGuess(categoryId, source, description) {
   const form = document.getElementById('add-form');
   if (!form) return;
 
+  let selected = null;
   for (const chip of form.querySelectorAll('[data-category]')) {
     const on = chip.dataset.category === categoryId;
     chip.classList.toggle('is-selected', on);
     chip.setAttribute('aria-pressed', String(on));
+    if (on) selected = chip;
   }
+
+  // Thirteen categories no longer fit the width, so the guess can land on a chip that
+  // is off the right edge - which reads as nothing having happened at all. It is moved
+  // to the front of the row instead, which is where the sheet renders the chosen one
+  // anyway, so a guess and a re-render agree about where it lives.
+  if (selected) frontChip(selected);
 
   const note = form.querySelector('.field-label-row .field-hint');
   const text = { history: 'from your past entries', cache: 'from your past entries',
@@ -469,6 +522,73 @@ function paintMonth(facts, text, gaveUp = false) {
   };
   sheetContent.innerHTML = ui.monthSheet(withFlag, text);
   if (!sheet.open) sheet.showModal();
+}
+
+/* -------------------------------------------------------------- spend tips */
+
+/*
+ * Suggestions are asked for, never pushed.
+ *
+ * `tips.busy` and `tips.error` live here rather than in the store because they are
+ * about this visit to the screen; the suggestions themselves live in the store,
+ * stamped with the figures they came from, so they survive a reload and are thrown
+ * away the moment the figures move under them.
+ */
+let tips = { busy: false, error: '' };
+
+function tipsState() {
+  const held = store.tipsHeld();
+  return {
+    items: held ? held.items : null,
+    ym: held ? held.ym : null,
+    madeAt: held ? held.madeAt : null,
+    busy: tips.busy,
+    error: tips.error,
+    possible: account.isSignedIn() && navigator.onLine
+  };
+}
+
+async function askForTips() {
+  if (tips.busy) return;
+
+  const profile = store.spendingProfile();
+  if (!profile || profile.spent <= 0) {
+    tips.error = 'There is nothing to read yet. Add a few expenses first.';
+    render();
+    return;
+  }
+
+  tips.busy = true;
+  tips.error = '';
+  render();
+
+  // Labels, not ids: the model writes with them, and "Personal care" reads as itself
+  // where "care" comes back in a sentence as a verb.
+  const items = await ai.suggestTips({
+    ym: profile.ym,
+    isCurrent: profile.isCurrent,
+    spent: profile.spent,
+    received: profile.received,
+    balance: profile.balance,
+    avgMonthly: profile.avgMonthly,
+    monthsCovered: profile.monthsCovered,
+    series: profile.series,
+    categories: profile.categories.map((c) => ({
+      label: category(c.id).label,
+      amount: c.amount,
+      share: c.share,
+      usual: c.usual,
+      delta: c.delta
+    }))
+  });
+
+  tips.busy = false;
+  if (!items) {
+    tips.error = 'Could not get suggestions just now. Try again in a moment.';
+  } else {
+    store.setTips(items);
+  }
+  render();
 }
 
 /* ----------------------------------------------------------------- sign in */
@@ -644,32 +764,136 @@ function hideSnack() {
   pendingUndo = null;
 }
 
-/* ------------------------------------------------------------ chart tooltip */
+/* --------------------------------------------------------- chart pin readout */
 
+let chartDismissers = [];
+
+/**
+ * Both charts, bound the same way.
+ *
+ * One function because the two charts differ only in what a column MEANS - a day on
+ * Home, a month on History - and that difference is a two-line `readout`. The
+ * gesture, the pin, the dimming and the dismissal are the same, and a second copy of
+ * them would be a second place for them to drift apart.
+ */
 function bindChart() {
-  const wrap = view.querySelector('[data-chart="daily"]');
-  if (!wrap) return;
-  const tip = wrap.querySelector('.chart-tip');
-  const stats = store.monthStats(ym);
+  // These run on every render and the chart nodes are replaced each time, so the
+  // document-level listeners have to come back down or they stack up one per render,
+  // each keeping its own dead `wrap` alive.
+  for (const off of chartDismissers) document.removeEventListener('pointerdown', off);
+  chartDismissers = [];
 
-  const show = (day) => {
-    const value = stats.perDay[day - 1] || 0;
-    const iso = `${ym}-${String(day).padStart(2, '0')}`;
-    tip.innerHTML = `<b>${longDate(iso)}</b><span>${value > 0 ? money(value) : 'nothing spent'}</span>`;
+  const daily = view.querySelector('[data-chart="daily"]');
+  if (daily) {
+    const stats = store.monthStats(ym);
+    bindPinnableChart(daily, stats.daysInMonth, (day) => {
+      const value = stats.perDay[day - 1] || 0;
+      const iso = `${ym}-${String(day).padStart(2, '0')}`;
+      return { title: longDate(iso), value: value > 0 ? money(value) : 'nothing spent' };
+    });
+  }
+
+  const monthly = view.querySelector('[data-chart="monthly"]');
+  if (monthly) {
+    // The same series the chart was drawn from, so a column and its readout cannot
+    // disagree about which month they are.
+    const series = store.monthlySeries(TREND_MONTHS);
+    bindPinnableChart(monthly, series.length, (i) => {
+      const m = series[i - 1];
+      if (!m) return null;
+      return {
+        title: monthLabel(m.ym),
+        value: m.spent > 0 ? money(m.spent) : 'nothing spent'
+      };
+    });
+  }
+}
+
+/**
+ * Tap a column to pin its figure; tap it again, or anywhere off the chart, to clear.
+ *
+ * The old version showed the figure on `pointermove` and hid it on `pointerleave`,
+ * which is a hover, and hover does not exist on a phone. A touch synthesises both:
+ * the tip appeared under the finger and was gone before the finger was out of the
+ * way, so on the device most of this app is used on, the chart had no readout at all.
+ *
+ * So the column is PINNED - the same grammar as selecting a row. Hover is kept, but
+ * only where a real pointer exists and only while nothing is pinned, so a mouse still
+ * gets the quick read and never fights the tap.
+ *
+ * A pin is not carried across a re-render. It is a reading of a chart, not a setting,
+ * and a figure that outlives the thing it was read from is worse than one that has to
+ * be tapped again.
+ */
+function bindPinnableChart(wrap, columns, readout) {
+  const tip = wrap.querySelector('.chart-tip');
+  const svg = wrap.querySelector('svg');
+  if (!tip || !svg || columns < 1) return;
+
+  // A device with a real pointer. Not `hover: hover` alone: a stylus and some
+  // Android browsers report hover while still delivering touch-shaped events.
+  const fine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  let pinned = null;
+
+  const show = (n) => {
+    const read = readout(n);
+    if (!read) return;
+    // Built as nodes rather than as a string of HTML: the readout is the only place
+    // a figure and a date reach the DOM without going through a template, and
+    // `textContent` cannot be talked into markup by a description or a locale.
+    const title = document.createElement('b');
+    title.textContent = read.title;
+    const value = document.createElement('span');
+    value.textContent = read.value;
+    tip.replaceChildren(title, value);
     tip.hidden = false;
-    const pct = (day - 0.5) / stats.daysInMonth;
+    const pct = (n - 0.5) / columns;
     tip.style.left = `${Math.min(88, Math.max(12, pct * 100))}%`;
+
+    // Everything else steps back so the chosen column is the one being read. The bar
+    // is not recoloured: a second hue would say this column is a different KIND of
+    // column rather than the one currently being looked at.
+    svg.classList.toggle('has-pin', pinned === n);
+    for (const bar of svg.querySelectorAll('.chart-bar')) {
+      bar.classList.toggle('is-active', Number(bar.dataset.day) === n);
+    }
+    // The hit target is tinted as well as the bar, because a column with nothing in
+    // it is a 2px stub: dimming the others would leave the pin nothing to point at.
+    for (const hit of svg.querySelectorAll('.chart-hit')) {
+      hit.classList.toggle('is-active', Number(hit.dataset.day) === n);
+    }
   };
 
-  wrap.addEventListener('pointermove', (e) => {
+  const clear = () => {
+    pinned = null;
+    tip.hidden = true;
+    svg.classList.remove('has-pin');
+    for (const el of svg.querySelectorAll('.is-active')) el.classList.remove('is-active');
+  };
+
+  // `click` rather than `pointerdown`, so a drag that started on the chart while
+  // scrolling the page does not leave a column pinned behind it.
+  wrap.addEventListener('click', (e) => {
     const hit = e.target.closest('.chart-hit');
-    if (hit) show(Number(hit.dataset.day));
+    if (!hit) return;
+    const n = Number(hit.dataset.day);
+    if (pinned === n) return clear();
+    pinned = n;
+    show(n);
   });
-  wrap.addEventListener('pointerdown', (e) => {
-    const hit = e.target.closest('.chart-hit');
-    if (hit) show(Number(hit.dataset.day));
-  });
-  wrap.addEventListener('pointerleave', () => { tip.hidden = true; });
+
+  if (fine) {
+    wrap.addEventListener('pointermove', (e) => {
+      if (pinned !== null) return;
+      const hit = e.target.closest('.chart-hit');
+      if (hit) show(Number(hit.dataset.day));
+    });
+    wrap.addEventListener('pointerleave', () => { if (pinned === null) tip.hidden = true; });
+  }
+
+  const dismiss = (e) => { if (pinned !== null && !wrap.contains(e.target)) clear(); };
+  document.addEventListener('pointerdown', dismiss);
+  chartDismissers.push(dismiss);
 }
 
 /* ------------------------------------------------------------------ search */
@@ -847,9 +1071,17 @@ function exportBackup() {
 document.addEventListener('click', (e) => {
   // Every clickable thing declares itself with one of these attributes. Adding a new
   // one to the markup without adding it here is a control that silently does nothing.
+  //
+  // `button[data-theme]`, not `[data-theme]`: an explicit theme is stamped on <html>
+  // as `data-theme`, so the bare selector matched the ROOT ELEMENT and every click
+  // that hit nothing else - the background, a card, a bar of the chart - walked up to
+  // it, re-saved the theme and re-rendered the screen. Invisible on the default
+  // "system" theme, because then the attribute is removed rather than set; on Light or
+  // Dark it re-rendered the page under every stray tap, which is what was throwing the
+  // chart's pinned day away the instant it was set.
   const el = e.target.closest([
     '[data-action]', '[data-tab]', '[data-entry]', '[data-month]',
-    '[data-direction]', '[data-category]', '[data-theme]',
+    '[data-direction]', '[data-category]', 'button[data-theme]',
     '[data-slice]', '[data-edit-field]', '[data-set-category]',
     '[data-set-direction]', '[data-pick-day]', '[data-set-day]', '[data-cal-step]',
     '[data-suggest-value]', '[data-open-month]'
@@ -1005,6 +1237,7 @@ document.addEventListener('click', (e) => {
     case 'next-month':
       if (ym < currentYM()) { ym = shiftYM(ym, 1); sliceId = null; render({ animate: true }); }
       break;
+    case 'get-tips': askForTips(); break;
     case 'export-json': exportBackup(); break;
     case 'sync-now': sync.syncNow('manual'); break;
     case 'install-app': {

@@ -192,12 +192,18 @@
 
   /* ------------------------------------------------------- chart categories */
 
-  /* Eight fixed categorical slots, assigned in order and never cycled. A ninth
-     category folds into --series-other, it does not get a generated hue.
-     Validated with the dataviz validator against --surface in both modes:
+  /* Twelve fixed categorical slots, assigned in order and never cycled. A
+     thirteenth category folds into --series-other, it does not get a generated
+     hue. Validated with the dataviz validator against --surface in both modes:
      lightness band, chroma floor, CVD separation and normal-vision floor all
      pass. Three of the light slots sit under 3:1 against white, which is why
-     every category is always printed with its name and amount beside the mark. */
+     every category is always printed with its name and amount beside the mark.
+
+     Slots 9-12 were added with Travel, Subscriptions, Education and Personal
+     care. Twelve hues is past the point where colour alone separates them for a
+     reader with CVD - 10 (brown) against 2 (orange), 11 (magenta) against 5
+     (pink) - so they are pulled apart on lightness instead, and the ranked list
+     under every chart keeps carrying the reading. */
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
@@ -206,6 +212,10 @@
   --series-6: #008300;
   --series-7: #4a3aa7;
   --series-8: #e34948;
+  --series-9:  #0e8ea1;
+  --series-10: #8a5a3c;
+  --series-11: #a5389c;
+  --series-12: #6e7b18;
   --series-other: #98a2b3;
 
   /* The gap punched between adjacent segments of a stacked bar, so two fills
@@ -286,6 +296,10 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-8: #e66767;
+    --series-9:  #23a7ba;
+    --series-10: #ab7554;
+    --series-11: #c66cbe;
+    --series-12: #93a234;
     --series-other: #7e8b9c;
   }
 }
@@ -340,6 +354,10 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
+  --series-9:  #23a7ba;
+  --series-10: #ab7554;
+  --series-11: #c66cbe;
+  --series-12: #93a234;
   --series-other: #7e8b9c;
 }
 

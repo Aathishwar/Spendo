@@ -18,7 +18,7 @@ import {
   attachAccount, requireAccount, requestCode, verifyCode, me, logout
 } from './auth.js';
 import { mailConfigured } from './mail.js';
-import { aiConfigured, categorise, reviewMonth } from './ai.js';
+import { aiConfigured, categorise, reviewMonth, spendingTips } from './ai.js';
 import { sync } from './sync.js';
 
 assertConfigured();
@@ -206,6 +206,60 @@ app.post('/api/review', requireAccount, async (req, res, next) => {
     };
 
     res.json({ text: await reviewMonth(facts) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/*
+ * Where spending could come down.
+ *
+ * Several months of figures instead of one, and the same contract as /api/review:
+ * the device has already added everything up, this route never touches the ledger,
+ * and the body is rebuilt field by field so nothing else reaches the model.
+ *
+ * Category LABELS are sent, not ids, because the model writes with them - "Personal
+ * care" reads as itself where "care" would come back in a sentence as a verb.
+ */
+app.post('/api/tips', requireAccount, async (req, res, next) => {
+  try {
+    const f = req.body?.facts;
+    if (!f || typeof f !== 'object' || typeof f.ym !== 'string') {
+      res.status(400).json({ error: 'facts are required' });
+      return;
+    }
+    if (!aiConfigured()) {
+      res.json({ tips: null, reason: 'not configured' });
+      return;
+    }
+    if (!aiAllowed(req.account.id)) {
+      res.status(429).json({ tips: null, reason: 'too many requests' });
+      return;
+    }
+
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    const facts = {
+      ym: f.ym.slice(0, 7),
+      isCurrent: Boolean(f.isCurrent),
+      spent: num(f.spent),
+      received: num(f.received),
+      balance: num(f.balance),
+      avgMonthly: num(f.avgMonthly),
+      monthsCovered: num(f.monthsCovered),
+      series: (Array.isArray(f.series) ? f.series : []).slice(0, 12).map((m) => ({
+        ym: String(m?.ym || '').slice(0, 7),
+        spent: num(m?.spent)
+      })),
+      categories: (Array.isArray(f.categories) ? f.categories : []).slice(0, 8).map((c) => ({
+        label: String(c?.label || '').slice(0, 24),
+        amount: num(c?.amount),
+        share: num(c?.share),
+        usual: num(c?.usual),
+        delta: num(c?.delta)
+      }))
+    };
+
+    res.json({ tips: await spendingTips(facts) });
   } catch (err) {
     next(err);
   }

@@ -10,8 +10,17 @@
  * it is the biggest category this month or the smallest. A chart that repaints its
  * categories when the sort changes is lying about identity.
  *
- * Nine expense categories, eight slots. "Other" takes --series-other by design; a
- * ninth generated hue would be indistinguishable from an existing one under CVD.
+ * Thirteen expense categories, twelve slots. "Other" takes --series-other by design;
+ * a generated hue for it would be indistinguishable from an existing one under CVD.
+ *
+ * Travel, Subscriptions, Education and Personal care were added after the first nine
+ * proved too coarse: a Goa trip landed in Entertainment, a Netflix renewal and an
+ * electricity bill shared a row, and course fees had nowhere to go but Other. Ids of
+ * the original nine are untouched, so entries already saved keep their category.
+ *
+ * "other" stays LAST in the array. `category()` falls back to the last element, and
+ * server/src/ai.js tells the model to answer with the last id in the list when
+ * nothing fits - both read the tail, not the name.
  */
 
 export const EXPENSE_CATEGORIES = [
@@ -23,6 +32,10 @@ export const EXPENSE_CATEGORIES = [
   { id: 'health',    label: 'Health',        icon: 'first-aid-kit',   series: 6 },
   { id: 'rent',      label: 'Rent',          icon: 'house',           series: 7 },
   { id: 'fun',       label: 'Entertainment', icon: 'film-slate',      series: 8 },
+  { id: 'travel',    label: 'Travel',        icon: 'airplane-tilt',   series: 9 },
+  { id: 'subs',      label: 'Subscriptions', icon: 'repeat',          series: 10 },
+  { id: 'education', label: 'Education',     icon: 'graduation-cap',  series: 11 },
+  { id: 'care',      label: 'Personal care', icon: 'scissors',        series: 12 },
   { id: 'other',     label: 'Other',         icon: 'dots-three-circle', series: 0 }
 ];
 
