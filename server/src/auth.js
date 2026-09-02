@@ -28,7 +28,7 @@
 
 import crypto from 'node:crypto';
 import { query } from './db.js';
-import { sendLoginCode, CODE_TTL_MINUTES } from './mail.js';
+import { sendLoginCode, mailConfigured, CODE_TTL_MINUTES } from './mail.js';
 
 const CODE_TTL_MS = CODE_TTL_MINUTES * 60 * 1000;
 const MAX_ATTEMPTS = 3;
@@ -63,6 +63,33 @@ const validEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v) && v.length <=
 
 const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
 
+/*
+ * Sign-in codes are keyed, session tokens are not, and the difference is entropy.
+ *
+ * A session token is 32 random bytes: a plain hash of it cannot be reversed, because
+ * there is nothing to search. A sign-in code is six digits - a million of them - so a
+ * plain SHA-256 of one is not a hash so much as an index. Anyone who reads the
+ * login_codes table can recover every live code in about a second on a laptop.
+ *
+ * An HMAC under a secret that is not in the database fixes that: the table alone is
+ * no longer enough to test a guess. Without AUTH_SECRET set this falls back to the
+ * old behaviour rather than refusing to start - the codes still expire in ten
+ * minutes and are still capped at three attempts - but it says so, once, at boot.
+ */
+const authSecret = () => process.env.AUTH_SECRET || '';
+
+const hashCode = (code) => (authSecret()
+  ? crypto.createHmac('sha256', authSecret()).update(String(code)).digest('hex')
+  : sha256(code));
+
+if (!authSecret()) {
+  console.warn(
+    '[auth] AUTH_SECRET is not set - sign-in codes are stored as a plain SHA-256. ' +
+    'Set it to any long random string so a leak of the codes table is not a leak ' +
+    'of the codes themselves.'
+  );
+}
+
 /** Six digits, from the CSPRNG. `Math.random` is predictable and this is a credential. */
 const newCode = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 
@@ -76,9 +103,19 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(left, right);
 }
 
+/*
+ * The address Express resolved, never the header a caller wrote.
+ *
+ * This used to read the leftmost value of X-Forwarded-For, which is whatever the
+ * client typed: a new value on each request gave every request its own bucket, so the
+ * per-source cap never applied to anyone who did not want it to. Worse, the bound
+ * below clears the whole map past 5000 keys, so 5001 invented addresses also reset
+ * the counters of everyone real.
+ *
+ * `trust proxy` is set to 1 in index.js, so req.ip is already the last hop before
+ * Render - the one value in that header the client cannot choose.
+ */
 function clientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length) return forwarded.split(',')[0].trim();
   return req.ip || 'unknown';
 }
 
@@ -161,6 +198,18 @@ export function requireAccount(req, res, next) {
  * send on rather than writing the response itself.
  */
 async function issueCode(req, email) {
+  /*
+   * With no mail key, mail.js prints the code to the log and reports success. That is
+   * a good local default and a hole in production: the endpoint answers 200, no email
+   * is sent, and the code sits in a log where anyone with access to it can sign in as
+   * the address they asked for. It stays available for development and is refused
+   * where it would be a credential leak.
+   */
+  if (!mailConfigured() && process.env.NODE_ENV === 'production') {
+    console.error('[auth] refusing to issue a code: mail is not configured');
+    return { status: 503, body: { error: 'Sign-in is unavailable right now. Try again later.' } };
+  }
+
   if (!ipAllowed(clientIp(req))) {
     return { status: 429, body: { error: 'Too many requests. Try again later.' } };
   }
@@ -202,7 +251,7 @@ async function issueCode(req, email) {
             attempts   = 0,
             sent_at    = now(),
             sent_count = case when $4 then 1 else login_codes.sent_count + 1 end`,
-    [email, sha256(code), expiresAt, resetCount]
+    [email, hashCode(code), expiresAt, resetCount]
   );
 
   const sent = await sendLoginCode(email, code);
@@ -229,7 +278,7 @@ async function consumeCode(email, code) {
     return false;
   }
 
-  if (!safeEqual(sha256(code), record.code_hash)) {
+  if (!safeEqual(hashCode(code), record.code_hash)) {
     if (record.attempts + 1 >= MAX_ATTEMPTS) {
       await query('delete from login_codes where email = $1', [email]);
     } else {
@@ -331,7 +380,15 @@ export async function logout(req, res, next) {
       // that stopped working.
       await query('update sessions set revoked_at = now() where token_hash = $1', [sha256(token)]);
     }
-    res.clearCookie(COOKIE, { path: '/' });
+    // Cleared with the attributes it was set with: a browser matches a removal
+    // against name, path, domain and sameSite, and a mismatch leaves the cookie in
+    // place on a session the server has already revoked.
+    res.clearCookie(COOKIE, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.secure || req.headers['x-forwarded-proto'] === 'https'
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -340,4 +397,4 @@ export async function logout(req, res, next) {
 
 /* ------------------------------------------------------- exported for tests */
 
-export const _internals = { normaliseEmail, validEmail, sha256, newCode, safeEqual };
+export const _internals = { normaliseEmail, validEmail, sha256, hashCode, newCode, safeEqual };

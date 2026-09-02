@@ -71,7 +71,10 @@ export async function sendLoginCode(to, code) {
       body: JSON.stringify({
         sender: { email: fromEmail(), name: fromName() },
         to: [{ email: to }],
-        subject: `Spendo sign-in code: ${code}`,
+        // The code is in the body, never the subject. A subject line is shown on a
+        // lock screen, sits in a notification, and is the part most likely to be
+        // logged in plain text by every mail server it passes through.
+        subject: 'Your Spendo sign-in code',
         textContent: parts.text,
         htmlContent: parts.html
       })

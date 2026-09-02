@@ -31,10 +31,117 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
+/*
+ * The headers a browser needs to be told, on every response.
+ *
+ * The app carries someone's whole ledger in localStorage and a session cookie for
+ * their account, and it had none of these. A policy is cheap here in a way it is not
+ * in most apps: one module script, no inline handlers, no third-party origin, every
+ * font and icon vendored. So the policy can be strict without an allowance for
+ * anything, and anything injected has nowhere to send what it reads.
+ *
+ * `style-src-attr 'unsafe-inline'` is the one concession, and it is not optional:
+ * meter widths, category tile hues and donut fills are inline style ATTRIBUTES
+ * computed per row. It permits attributes only - a stylesheet or a <style> block
+ * from anywhere but this origin is still refused.
+ *
+ * frame-ancestors closes the clickjacking hole. A row in this app deletes an entry
+ * on one tap, and until now any page anywhere could have framed it invisibly and
+ * borrowed those taps.
+ */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "style-src 'self'",
+  "style-src-attr 'unsafe-inline'",
+  "manifest-src 'self'",
+  "worker-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'"
+].join('; ');
+
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Same-origin only, so a shared URL never carries a path from inside someone's
+  // ledger to another site.
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+
+  // Only over TLS, and only when it is real TLS rather than a header a caller wrote:
+  // `req.secure` is resolved by Express from the proxy we trust.
+  if (req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
-// Every request learns who it is from; only some require it.
-app.use(attachAccount);
+
+/*
+ * Who a request is from, resolved for the API and nowhere else.
+ *
+ * This ran on EVERY request, above the static handler. A cold load is a dozen or so
+ * files, so one visit with a session cookie cost a dozen session SELECTs and a dozen
+ * `last_seen_at` writes - and a stranger with a junk cookie could aim that at the
+ * database for free, on a Postgres plan billed by compute. Only /api ever reads
+ * `req.account`, so only /api pays for it.
+ */
+app.use('/api', attachAccount);
+
+/*
+ * No response from the API is cacheable. /api/me carries an email address and
+ * /api/sync carries the ledger; neither should sit in a proxy, a browser cache or a
+ * back/forward buffer. The static files already say this for their own reasons.
+ */
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, must-revalidate');
+  next();
+});
+
+/*
+ * A second lock on cross-site requests, behind SameSite=Lax.
+ *
+ * The session cookie is SameSite=Lax, so a browser does not attach it to a POST from
+ * another site, and that is the real defence. This is the belt: if a request that
+ * changes something arrives declaring an origin, and that origin is not us, it is
+ * refused whatever the cookie policy did.
+ *
+ * A MISSING Origin is allowed through on purpose. Same-origin GETs do not send one,
+ * nor do some older browsers on same-origin POSTs, and refusing those would break
+ * sign-in on exactly the phones this app is written for - while adding nothing, since
+ * SameSite already covers the case.
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+app.use('/api', (req, res, next) => {
+  if (SAFE_METHODS.has(req.method)) return next();
+
+  const origin = req.get('origin');
+  if (!origin) return next();
+
+  const host = req.get('host');
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(origin).host === host;
+  } catch {
+    sameOrigin = false;              // not a URL we can read is not our origin
+  }
+
+  if (!sameOrigin) {
+    res.status(403).json({ error: 'Cross-site requests are not accepted.' });
+    return;
+  }
+  next();
+});
 
 if (!aiConfigured()) {
   console.warn(
@@ -45,8 +152,12 @@ if (!aiConfigured()) {
 
 if (!mailConfigured()) {
   console.warn(
-    '[spendo] BREVO_API_KEY or MAIL_FROM_EMAIL is not set - sign-in codes will be\n' +
-    '         printed to this console instead of emailed.'
+    process.env.NODE_ENV === 'production'
+      ? '[spendo] BREVO_API_KEY or MAIL_FROM_EMAIL is not set - sign-in is DISABLED. ' +
+        'Codes are not printed to a production log, because anyone who could read ' +
+        'that log could then sign in as anyone.'
+      : '[spendo] BREVO_API_KEY or MAIL_FROM_EMAIL is not set - sign-in codes will be ' +
+        'printed to this console instead of emailed. Refused in production.'
   );
 }
 
@@ -73,7 +184,13 @@ app.get('/api/health', async (_req, res) => {
     await pool.query('select 1');
     res.json({ ok: true });
   } catch (err) {
-    res.status(503).json({ ok: false, error: err.message });
+    // The message is logged, never returned. A driver error names the host, the
+    // database and the role it failed to authenticate - "password authentication
+    // failed for user spendo" is a free hint to anyone who asks this endpoint at the
+    // wrong moment. The 500 handler below has always been careful about this; this
+    // one was not.
+    console.error('[spendo] readiness check failed:', err.message);
+    res.status(503).json({ ok: false });
   }
 });
 
@@ -272,21 +389,63 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'No such endpoint.'
 /* ------------------------------------------------------------------ the app */
 
 /*
+ * What the browser is allowed to ask for, named one directory at a time.
+ *
+ * This used to be `express.static(APP_ROOT)`, and APP_ROOT is the repository. That
+ * served the whole repository: server/src/auth.js, package-lock.json, render.yaml,
+ * the docs, tools/ - and, because serve-static's default dotfile handling covers dot
+ * FILES but not files inside dot DIRECTORIES, /.git/HEAD and /.git/index too, which
+ * is the whole history one object at a time. None of it held a secret, which is luck
+ * rather than design: the next config file added next to server/.env without a
+ * leading dot would have been public the moment it landed.
+ *
+ * An allowlist cannot have that accident. A new directory is not reachable until it
+ * is named here, which is the failure everybody wants: the file 404s and someone
+ * notices, rather than the file being served and nobody noticing.
+ *
+ * `dotfiles: 'deny'` is belt and braces on top of it.
+ */
+const PUBLIC_DIRS = ['js', 'styles', 'icons', 'fonts'];
+const PUBLIC_FILES = ['index.html', 'manifest.webmanifest', 'sw.js'];
+
+/*
  * no-store on everything, for the same reason tools/serve.py sends it: a cached ES
  * module is how an edited file keeps serving last week's code, and the service
  * worker already keeps the app working offline. Freshness here, offline there.
  */
-app.use(express.static(APP_ROOT, {
-  index: 'index.html',
-  etag: false,
-  lastModified: false,
-  setHeaders(res) {
-    res.setHeader('Cache-Control', 'no-store, must-revalidate');
-  }
-}));
-
-app.get('*', (_req, res) => {
+function staticHeaders(res) {
   res.setHeader('Cache-Control', 'no-store, must-revalidate');
+}
+
+for (const dir of PUBLIC_DIRS) {
+  app.use(`/${dir}`, express.static(path.join(APP_ROOT, dir), {
+    index: false,
+    etag: false,
+    lastModified: false,
+    dotfiles: 'deny',
+    fallthrough: false,
+    setHeaders: staticHeaders
+  }));
+}
+
+for (const file of PUBLIC_FILES) {
+  const send = (_req, res) => {
+    staticHeaders(res);
+    res.sendFile(path.join(APP_ROOT, file));
+  };
+  app.get(`/${file}`, send);
+  // The service worker's scope is the origin, so it has to answer at the root path
+  // it was registered from; index.html is what "/" means.
+  if (file === 'index.html') app.get('/', send);
+}
+
+/*
+ * Every other path is a route inside the app, so it gets the shell and the client
+ * router works out what it means. Only GET: a POST to an unknown path is a caller
+ * doing something odd, not a person opening a page.
+ */
+app.get('*', (_req, res) => {
+  staticHeaders(res);
   res.sendFile(path.join(APP_ROOT, 'index.html'));
 });
 

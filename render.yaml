@@ -59,3 +59,12 @@ services:
       # figures without the written summary.
       - key: GROQ_API_KEY
         sync: false
+      # Keys the sign-in codes in the database, so a leak of that table is not a
+      # leak of the codes themselves. Any long random string; changing it only
+      # invalidates codes issued in the last ten minutes.
+      - key: AUTH_SECRET
+        sync: false
+      # Read by auth.js: without mail configured, production refuses to issue a code
+      # rather than printing it to this log and answering 200.
+      - key: NODE_ENV
+        value: production

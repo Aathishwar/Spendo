@@ -33,12 +33,21 @@ function sslConfig() {
   if (mode === 'verify') return { rejectUnauthorized: true };
   if (mode === 'no-verify') return { rejectUnauthorized: false };
 
-  // Unset: local Postgres almost never has TLS configured, and every hosted one
-  // requires it. Guess from the host rather than making the user set a flag to run
-  // the thing locally.
+  /*
+   * Unset: local Postgres almost never has TLS configured, and every hosted one
+   * requires it. Guess from the host rather than making the user set a flag to run
+   * the thing locally.
+   *
+   * A hosted host now VERIFIES the certificate. It used to encrypt without checking
+   * who it was talking to, which is a padlock on a door with no lock: anyone able to
+   * sit on the path to the database could present any certificate and read the whole
+   * ledger, credentials included. Neon and every other managed Postgres serve a
+   * certificate from a public CA that Node already trusts, so this needs nothing
+   * configured - and `PGSSL=no-verify` is still there for a host that does not.
+   */
   const url = process.env.DATABASE_URL || '';
   const local = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url);
-  return local ? false : { rejectUnauthorized: false };
+  return local ? false : { rejectUnauthorized: true };
 }
 
 /**

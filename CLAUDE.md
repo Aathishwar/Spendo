@@ -644,6 +644,65 @@ not led with, and skipping medical care is never suggested.
 
 ---
 
+## What the server exposes, and what it refuses
+
+A security pass on 2026-09-02 found most of the risk in one line and one omission.
+
+**The static mount served the whole repository.** `express.static(APP_ROOT)` where
+APP_ROOT is the repo root put `server/src/auth.js`, `render.yaml`, `package-lock.json`,
+the docs and `tools/` on the public web - and, because serve-static's default dotfile
+handling covers dot *files* but not files inside dot *directories*, `/.git/HEAD` and
+`/.git/index` with them, which is the entire history one object at a time. Reproduced
+against the real options on express 4.22.2; `dotfiles: 'ignore'` or `'deny'` blocks it,
+the default does not. It is now an allowlist - `js/`, `styles/`, `icons/`, `fonts/`, plus
+`index.html`, `sw.js` and the manifest - so a new directory is unreachable until it is
+named. `server/.env` was never exposed, and no secret has ever been committed (checked
+across all history), so this was luck holding rather than design.
+
+**There were no security headers at all.** Now there are, and a strict policy costs
+nothing here: one module script, no inline handlers, no third-party origin, every font
+and icon vendored. `style-src-attr 'unsafe-inline'` is the single concession, and it is
+load-bearing - meter widths, tile hues and donut fills are inline style attributes
+computed per row. `frame-ancestors 'none'` closes clickjacking, which mattered more than
+usual on a screen where one tap deletes an entry.
+
+**`attachAccount` ran on every request, above the static handler.** A cold load is a
+dozen files, so one visit with a session cookie cost a dozen session SELECTs and a dozen
+`last_seen_at` writes, and a stranger with a junk cookie could aim that at Postgres for
+free. It is mounted on `/api` now, which is the only place `req.account` is read.
+
+**The per-source rate limit read a header the caller writes.** `clientIp` took the
+leftmost `X-Forwarded-For` value, so a new value per request meant a new bucket per
+request, and 5001 invented values also cleared the map that holds everyone else's
+counters. It reads `req.ip` now, resolved by Express through the one trusted proxy hop.
+
+Four smaller ones, in the same pass:
+
+- `/api/health` returned the raw driver error, which names the host, database and role.
+  Logged, not returned.
+- Sign-in codes were stored as a plain SHA-256. A six-digit space is not a search, it is
+  a lookup, so a leak of `login_codes` was a leak of every live code. Keyed with
+  `AUTH_SECRET` when it is set; the session tokens are untouched, because 32 random bytes
+  need no key and rehashing them would sign everybody out.
+- With mail unconfigured the server printed codes to the log and answered 200. Fine
+  locally, a credential leak in production, where it is now refused with a 503.
+- The code was in the email SUBJECT line - the part shown on a lock screen and logged in
+  plain text by every hop. It is in the body only.
+
+Cross-site writes are refused when a request declares a foreign origin, behind the
+SameSite=Lax cookie that is the actual defence. A missing `Origin` is allowed through on
+purpose: same-origin GETs do not send one, and refusing those would break sign-in on the
+phones this is written for while adding nothing.
+
+### Still open
+
+- No storage quota per account on `/api/sync`, and account creation is free to anyone who
+  can receive mail. Both scale linearly with mailboxes.
+- Sessions last 365 days and are not rotated; there is no session list and no "sign out
+  the other devices".
+- The ledger and the last-used email stay in `localStorage` after signing out. Deliberate
+  - the app works signed out - but on a shared browser the next person can read it.
+
 ## Installing
 
 **`manifest.webmanifest` declares `"id": "spendo"`, and that string must never change.**

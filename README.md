@@ -41,7 +41,8 @@ npm start                        # serves the API and the app on http://localhos
 ```
 
 Leave `BREVO_API_KEY` empty and sign-in codes are printed to the server console instead
-of emailed, which is enough to test signing in end to end.
+of emailed, which is enough to test signing in end to end. That fallback is refused when
+`NODE_ENV=production`: a code in a log anyone can read is a sign-in anyone can perform.
 
 ### Tests
 
@@ -64,6 +65,8 @@ service's **Environment** tab - they are marked `sync: false` and are never in t
 | `BREVO_API_KEY` | sends the sign-in code |
 | `MAIL_FROM_EMAIL` | a sender **verified** on that Brevo account |
 | `GROQ_API_KEY` | Groq, for the category guess and month write-ups. Optional - both fall back cleanly without it |
+| `AUTH_SECRET` | Keys the sign-in codes stored in the database. Any long random string. Without it they are a plain SHA-256, and a six-digit code hashed that way is recoverable in seconds by anyone who reads the table |
+| `NODE_ENV` | `production`. Set in `render.yaml`; it is what makes the server refuse to issue a sign-in code when mail is not configured |
 
 Then point a cron at `https://<service>.onrender.com/healthz` every 10 minutes. The free
 tier idles a service after about 15 minutes, and a cold start is 30+ seconds of someone
