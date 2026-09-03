@@ -770,16 +770,37 @@ button { font: inherit; color: inherit; }
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  padding-inline-end: var(--space-4);
+  /* Sized so the label sits centred in the strip the row uncovers when it parks. */
+  padding-inline-end: 15px;
+  border: 0;
   background: var(--spend-tint);
   color: var(--spend);
+  font-family: inherit;
   font-size: var(--text-caption);
   font-weight: var(--weight-semibold);
   /* Fades in with the drag, so a half-swipe reads as "not yet" rather than as a
      control that is already armed. app.js sets the custom property. */
   opacity: var(--swipe-reveal, 0);
+  /* Not a target until the row has actually parked open. Mid-drag it is scenery, and
+     a tap landing on scenery that happens to be under the thumb is how a list deletes
+     something nobody chose. */
+  pointer-events: none;
 }
 .row-swipe-action .icon { width: 1.15rem; height: 1.15rem; }
+
+/*
+ * Parked open: the row rests to the left and the surface becomes a real button.
+ *
+ * This is the half of the gesture that makes it safe. A short swipe commits to
+ * nothing - it puts a labelled control on screen and waits - and only a long swipe
+ * deletes on the strength of the gesture alone.
+ */
+.row-swipe.is-open .row-swipe-action {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.row-swipe.is-open .row-swipe-action:active { background: var(--spend-tint-strong, var(--spend-tint)); }
 
 /*
  * The row rides above it. The transition is on by default so a release springs back,

@@ -805,12 +805,21 @@ a payload goes through `sendableChanges()`, including the `pagehide` beacon, bec
 closed mid-window would otherwise send exactly the thing being held back. The hold
 self-expires, so a lost timer cannot strand a record forever.
 
-**Two thresholds on two different scales, which is a bug waiting to be reintroduced.** The
-row rubber-bands past the commit point, so the painted travel caps at about 117px. The
-throw threshold was 150px and was being compared against that painted number, which made
-the gesture unreachable - a hard flick did nothing, and it tested as "the feature works"
-because the release path did. The commit is measured on what the row does; the throw is
-measured on what the finger does. They cannot share a scale.
+**Every threshold is measured on the raw travel; only the drawing uses the damped one.**
+This is the bug that has already happened twice here. The row rubber-bands, so painted
+travel tops out well short of raw travel, and a threshold compared against the wrong one
+of the two is unreachable: first the throw did nothing on a hard flick, then - after the
+parked state was added - the delete zone shrank to a 1.3px sliver of painted travel that
+no thumb could land in. Both tested as "working" because the other path still fired. The
+gesture is about what the thumb did; the rubber band is only about what the row looks like
+while it does it.
+
+**A short swipe commits to nothing.** It parks the row at 104px with a real Delete button
+exposed; only a swipe past 150px deletes on the strength of the gesture alone. The parked
+button is `aria-hidden` with `tabindex="-1"` on purpose - it is a target for a thumb, and
+the keyboard and screen-reader route to the same action is the delete button inside the
+detail sheet, which every row already opens. One row is open at a time, and a re-render
+drops the reference, since the node it pointed at no longer exists.
 
 **Deletes batch.** Swiping is quick enough that three rows go in under six seconds, and
 three snackbars each with their own countdown is not an offer to undo, it is a pile of

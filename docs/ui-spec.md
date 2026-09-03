@@ -125,13 +125,24 @@ appeared and vanished inside the same tap. A mouse still gets the hover preview,
 while nothing is pinned. Nothing about the pin survives a re-render: it is a reading of the
 chart, not a setting.
 
-**Swipe a row left to delete it.** The row rides on a track with the delete surface
-underneath, so nothing is created mid-gesture - the row moves and what was always behind
-it is revealed. Three numbers, and two of them are measured on different scales: below
-14px of raw movement it is still a tap or a scroll; past 88px of PAINTED travel a release
-deletes; past 150px of RAW travel it deletes without waiting for the release, because a
-hard flick is a decision already made. Past the commit point the row rubber-bands, so it
-cannot be dragged off the screen and the resistance says the threshold has been crossed.
+**Swipe a row left to delete it**, in the two-stage form: a short swipe puts a Delete
+button on screen and waits, a long one deletes. The row rides on a track with the delete
+surface underneath, so nothing is created mid-gesture - the row moves and what was always
+behind it is revealed. Four zones, all measured on how far the finger travelled:
+
+| travel | on release |
+|---|---|
+| under 14px | nothing. It was a tap, or a scroll |
+| 14-46px | springs back |
+| 46-150px | parks open at 104px, Delete exposed and tappable |
+| over 150px | deletes |
+| over 210px | deletes at once, without waiting for the release |
+
+Past 104px the row rubber-bands, so it cannot be dragged off the screen and the change in
+resistance is the gesture saying which of the two things it is about to do. A parked row
+closes when you tap it, tap or swipe another row, or scroll - and the tap that closes it
+does nothing else, because the way out of a gesture should not also be a way into a
+screen nobody asked for.
 
 Left only. Right is where Android's back gesture lives, and that is not a fight worth
 picking at the edge of the screen. `touch-action: pan-y` is what makes the two gestures

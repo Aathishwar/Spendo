@@ -146,6 +146,9 @@ function render({ animate = false } = {}) {
   };
   ctx.searchResult = runSearch(ctx.entries, search.query);
 
+  // Whatever was parked open belongs to the DOM that is about to be replaced.
+  openTrack = null;
+
   if (tab === 'today') view.innerHTML = ui.screenToday(ctx);
   else if (tab === 'history') view.innerHTML = ui.screenHistory(ctx);
   else if (tab === 'insights') view.innerHTML = ui.screenInsights(ctx);
@@ -1033,23 +1036,45 @@ function settleDeletes() {
  * Left only. Right is where Android's back gesture lives and that is not a fight
  * worth picking on the edge of the screen.
  */
-const SLOP = 14;          // raw: below this it is a tap or a scroll
-const COMMIT = 88;        // painted: past this a release deletes
-const THROW = 150;        // raw: past this it deletes without waiting for a release
-const MAX_PULL = 170;     // painted: the row never travels further than this
+/*
+ * Every decision is made on the RAW distance the finger travelled. Only the drawing
+ * uses the damped one.
+ *
+ * Mixing the two is a bug that has already happened once here: the row rubber-bands
+ * past the resting point, so painted travel tops out well short of raw travel, and a
+ * threshold compared against the wrong one of the two is unreachable. The gesture is
+ * about what the thumb did; the rubber band is only about what the row looks like
+ * while it does it.
+ */
+const SLOP = 14;          // below this it is a tap or a scroll
+const OPEN_AT = 46;       // past this a release parks the row open
+const COMMIT = 150;       // past this a release deletes outright
+const THROW = 210;        // past this it deletes without waiting for a release
+const PARK = 104;         // where an opened row rests, and how wide the button is
+const MAX_PULL = 190;     // the row itself never travels further than this
 
 let swipe = null;
+let openTrack = null;     // the one row currently parked open, if any
 
-/** Rubber band past the point of no return, so the row cannot be dragged off screen. */
-function pull(dx) {
-  const distance = Math.min(-dx, MAX_PULL);
-  return distance <= COMMIT ? distance : COMMIT + (distance - COMMIT) * 0.35;
+/**
+ * Rubber band past the point of no return, so the row cannot be dragged off screen.
+ *
+ * The resistance starts where the row would rest if released - so a swipe feels free
+ * up to "open", and heavier from there to "delete". The change in weight is the
+ * gesture telling a thumb which of the two it is about to do.
+ */
+function pull(raw) {
+  const distance = Math.min(raw, MAX_PULL);
+  return distance <= PARK ? distance : PARK + (distance - PARK) * 0.55;
 }
 
-function paintSwipe(track, distance) {
-  track.style.setProperty('--swipe-x', `${-distance}px`);
-  track.style.setProperty('--swipe-reveal', String(Math.min(1, distance / COMMIT)));
-  track.classList.toggle('is-armed', distance >= COMMIT);
+function paintSwipe(track, raw) {
+  const painted = pull(raw);
+  track.style.setProperty('--swipe-x', `${-painted}px`);
+  // Full strength by the time the row would park, so the label is readable at the
+  // point where letting go leaves it on screen.
+  track.style.setProperty('--swipe-reveal', String(Math.min(1, raw / PARK)));
+  track.classList.toggle('is-armed', raw >= COMMIT);
 }
 
 function endSwipe(track) {
@@ -1058,12 +1083,46 @@ function endSwipe(track) {
   track.style.removeProperty('--swipe-reveal');
 }
 
+/** Rest the row open, with its delete button exposed and tappable. */
+function parkSwipe(track) {
+  closeOpenSwipe();
+  track.classList.remove('is-dragging', 'is-armed');
+  track.classList.add('is-open');
+  track.style.setProperty('--swipe-x', `-${PARK}px`);
+  track.style.setProperty('--swipe-reveal', '1');
+  openTrack = track;
+}
+
+/**
+ * Close whatever is open. Returns whether anything was.
+ *
+ * The caller needs to know, because the tap that closes a parked row must not also
+ * open that row's detail sheet - dismissing something is a complete action on its own.
+ */
+function closeOpenSwipe() {
+  if (!openTrack) return false;
+  const track = openTrack;
+  openTrack = null;
+  track.classList.remove('is-open');
+  endSwipe(track);
+  return true;
+}
+
 view.addEventListener('pointerdown', (e) => {
   // Mouse right-clicks and stylus barrels are not swipes, and a second finger during
   // a swipe is not a second swipe.
   if (e.button !== 0 || swipe) return;
   const track = e.target.closest('[data-swipe]');
+
+  // A press anywhere other than the open row closes it - including on another row,
+  // which is what makes swiping down a list feel like one thing rather than a series
+  // of little menus left behind.
+  if (openTrack && track !== openTrack) closeOpenSwipe();
+
   if (!track || track.classList.contains('is-removing')) return;
+  // The exposed button handles its own taps; dragging the row it belongs to would
+  // fight it.
+  if (e.target.closest('.row-swipe-action')) return;
 
   swipe = {
     track,
@@ -1109,18 +1168,10 @@ view.addEventListener('pointermove', (e) => {
     }
   }
 
-  swipe.distance = pull(dx);
+  swipe.distance = -dx;
   paintSwipe(swipe.track, swipe.distance);
 
-  /*
-   * The throw is measured on the RAW drag, not on the damped one.
-   *
-   * `pull` caps what the row can move to about 117px, so comparing the painted
-   * distance against a 150px threshold made the throw unreachable - the gesture was
-   * dead code that tested as "nothing happens on a hard flick". The rubber band is
-   * how far the row travels; the finger is what the intent is read from.
-   */
-  if (-dx >= THROW) {
+  if (swipe.distance >= THROW) {
     const { track, id } = swipe;
     swipe = null;
     removeRow(track, id);
@@ -1134,7 +1185,10 @@ for (const event of ['pointerup', 'pointercancel']) {
     swipe = null;
 
     if (axis !== 'x') return;
+
+    // Three outcomes, and only the longest of them destroys anything.
     if (distance >= COMMIT) removeRow(track, id);
+    else if (distance >= OPEN_AT) parkSwipe(track);
     else endSwipe(track);     // springs back on its own transition
   });
 }
@@ -1146,11 +1200,28 @@ for (const event of ['pointerup', 'pointercancel']) {
  */
 view.addEventListener('click', (e) => {
   const track = e.target.closest('[data-swipe]');
+
   if (track && (track.classList.contains('is-dragging') || track.classList.contains('is-removing'))) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  // A tap on the row that is parked open closes it, and does nothing else. Opening
+  // the detail sheet from the same tap would mean the way out of the gesture is also
+  // a way into a screen nobody asked for.
+  if (track && track === openTrack && !e.target.closest('.row-swipe-action')) {
+    closeOpenSwipe();
     e.preventDefault();
     e.stopPropagation();
   }
 }, true);
+
+/*
+ * Scrolling closes it too. A row left hanging open above the fold is a control the
+ * reader has forgotten about and will meet again by accident.
+ */
+window.addEventListener('scroll', () => closeOpenSwipe(), { passive: true });
 
 /**
  * Play the row out, then delete it.
@@ -1160,7 +1231,8 @@ view.addEventListener('click', (e) => {
  * animation has finished, so a re-render cannot pull the row out from under it.
  */
 function removeRow(track, id) {
-  track.classList.remove('is-dragging', 'is-armed');
+  if (track === openTrack) openTrack = null;
+  track.classList.remove('is-dragging', 'is-armed', 'is-open');
   track.style.height = `${track.offsetHeight}px`;
   void track.offsetHeight;                 // let the browser see that height first
   track.classList.add('is-removing');
@@ -1765,6 +1837,15 @@ document.addEventListener('click', (e) => {
     case 'next-month':
       if (ym < currentYM()) { ym = shiftYM(ym, 1); sliceId = null; render({ animate: true }); }
       break;
+    case 'swipe-delete': {
+      // The row is parked open, so it is already sitting where the exit animation
+      // starts. Play it out from there rather than having it jump back first.
+      const track = el.closest('[data-swipe]');
+      closeOpenSwipe();
+      if (track) removeRow(track, el.dataset.entry);
+      else deleteEntry(el.dataset.entry);
+      break;
+    }
     case 'get-tips': askForTips(); break;
     case 'export-json': exportBackup(); break;
     case 'sync-now': sync.syncNow('manual'); break;

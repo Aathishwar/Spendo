@@ -104,9 +104,10 @@ export function entryRow(e, { showCategory = true, swipe = true } = {}) {
   // the detail sheet, which every row already opens.
   return `
     <div class="row-swipe" data-swipe data-swipe-entry="${esc(e.id)}">
-      <div class="row-swipe-action" aria-hidden="true">
+      <button class="row-swipe-action" type="button" tabindex="-1" aria-hidden="true"
+        data-action="swipe-delete" data-entry="${esc(e.id)}">
         ${icon('trash-simple')}<span class="row-swipe-label">Delete</span>
-      </div>
+      </button>
       ${row}
     </div>`;
 }
