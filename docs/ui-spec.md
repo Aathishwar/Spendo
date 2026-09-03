@@ -125,9 +125,37 @@ appeared and vanished inside the same tap. A mouse still gets the hover preview,
 while nothing is pinned. Nothing about the pin survives a re-render: it is a reading of the
 chart, not a setting.
 
-Long-press or swipe-left on a row reveals delete. Delete is optimistic with a 6 second
-undo snackbar, because that is what the old `/undo` command was for and an undo that lives
-in the moment beats a command you have to remember.
+**Swipe a row left to delete it.** The row rides on a track with the delete surface
+underneath, so nothing is created mid-gesture - the row moves and what was always behind
+it is revealed. Three numbers, and two of them are measured on different scales: below
+14px of raw movement it is still a tap or a scroll; past 88px of PAINTED travel a release
+deletes; past 150px of RAW travel it deletes without waiting for the release, because a
+hard flick is a decision already made. Past the commit point the row rubber-bands, so it
+cannot be dragged off the screen and the resistance says the threshold has been crossed.
+
+Left only. Right is where Android's back gesture lives, and that is not a fight worth
+picking at the edge of the screen. `touch-action: pan-y` is what makes the two gestures
+coexist: vertical belongs to the list, horizontal to the row, decided by the browser
+rather than by two handlers arguing. The axis is chosen once, on the first movement past
+the slop, and never revisited - deciding continuously is what makes a diagonal drag feel
+like the list is fighting the thumb.
+
+Leaving happens in two stages, and the second is the one usually skipped: the row slides
+out and fades, THEN the track collapses its height, so the rows below rise into the gap
+instead of jumping up. Undo plays it back the other way, and a restored row arrives with
+the same entrance a new row gets, because that is what it is.
+
+Delete is optimistic with a **6 second** undo snackbar, and deletes inside that window
+BATCH - three swipes are one bar reading "3 deleted" with one Undo that puts all three
+back, not three bars stacked up to dismiss. **Nothing reaches the server until the window
+closes.** The record is tombstoned locally the instant it is swiped, which is what makes
+the row vanish and survive a reload, but it is held out of the push until the offer to
+undo is gone from the screen. If the app is killed inside the window the hold dies with
+it and the tombstone syncs on the next boot, which is correct: the delete did happen, and
+only the offer to undo it was lost.
+
+The gesture is not the only way to delete - the button inside the detail sheet is the
+keyboard and screen-reader route, and both go through the same path.
 
 ### 2. History
 

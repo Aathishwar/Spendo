@@ -184,9 +184,9 @@ Next: phase 2, the server and sync.
 
 - **No tests.** Phase 1 was verified by driving a browser, which is fine for one pass and is
   not a regression net.
-- **Search has no date operators yet.** Keywords and the amount operators (`>500`, `<200`,
-  `100-500`, an exact number) work now; `d:21`, `21-06-2025` and `m:2025-05` arrive with the
-  rest of search in phase 5.
+- **Search is complete.** Keywords, the amount operators (`>500`, `<200`, `100-500`, an
+  exact number) and the date operators (`d:21`, `21-06-2025`, a range, `m:2025-05`,
+  `today`, `yesterday`) all work and combine.
 
 ---
 
@@ -781,6 +781,62 @@ shows them instead of retrying forever against a wall.
   Excel dates, amounts are signed so a column of them sums to the net movement, the header
   row is frozen and filtered. Verified by reading the output back with openpyxl, including
   Tamil, emoji, quotes, angle brackets, a 600-character description and an embedded newline.
+
+## Swipe, undo, and searching by date
+
+Three things in the code disagreed with two documents, and finding them is most of what
+this pass was:
+
+- **Swipe-to-delete did not exist.** Both CLAUDE.md and the UI spec said "long-press or
+  swipe-left on a row reveals delete". Nothing bound a gesture; delete lived only inside
+  the detail sheet. Documentation of an intention reads exactly like documentation of a
+  feature six months later.
+- **The undo window was three seconds**, while the CSS countdown animation and both
+  documents said six. One feature, three numbers. It is six everywhere now.
+- **The delete reached Postgres before it could be undone.** `removeEntry` tombstones
+  locally and the sync debounce is two seconds, so the tombstone went up, and an undo
+  pushed a second write to take it back. Nothing was lost - last-write-wins handles that
+  pair - but a row spent a moment deleted in a database on the strength of a gesture the
+  person had not finished making.
+
+**The hold is in sync.js, not in the store.** A deleted record is tombstoned on the device
+immediately and kept out of the PUSH until its undo window closes. Every place that builds
+a payload goes through `sendableChanges()`, including the `pagehide` beacon, because a tab
+closed mid-window would otherwise send exactly the thing being held back. The hold
+self-expires, so a lost timer cannot strand a record forever.
+
+**Two thresholds on two different scales, which is a bug waiting to be reintroduced.** The
+row rubber-bands past the commit point, so the painted travel caps at about 117px. The
+throw threshold was 150px and was being compared against that painted number, which made
+the gesture unreachable - a hard flick did nothing, and it tested as "the feature works"
+because the release path did. The commit is measured on what the row does; the throw is
+measured on what the finger does. They cannot share a scale.
+
+**Deletes batch.** Swiping is quick enough that three rows go in under six seconds, and
+three snackbars each with their own countdown is not an offer to undo, it is a pile of
+things to dismiss. One bar, one Undo, one restore.
+
+### Searching by date
+
+The Telegram bot's date grammar, finally reimplemented: `d:21`, `21-06-2025`,
+`21-06-2025..25-06-2025` (the second date may drop the year it shares), `m:2025-05`,
+`today` and `yesterday`. Day-first everywhere, because a search box that wants ISO while
+the screen shows 21-06-2025 is a box people stop typing dates into.
+
+**Matching is two string comparisons.** Dates are stored as `YYYY-MM-DD` and that sorts
+lexicographically in date order, so a range check needs no parsing and cannot be moved by
+a timezone - the one bug this app has been careful to avoid everywhere else.
+
+**`d:21` means the 21st of the month on screen**, which is why `parseQuery` takes the
+month as an argument. When "matches in other months" walks the ledger, it re-parses the
+query against each month in turn; parsing once and reusing it would have searched every
+month for the 21st of September.
+
+**A date the calendar does not have is answered, not searched for.** `d:31` in September
+reported "no transaction matches in 31 September 2026" - a date that does not exist,
+phrased as though the app had looked. It now says "September 2026 has no 31st." Every
+date term is also said back in words under the field, so a year typed wrong is visible
+instead of looking like a quiet month.
 
 ## Installing
 

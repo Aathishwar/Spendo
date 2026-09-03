@@ -68,11 +68,19 @@ function figure(label, value, note) {
  * Inside an expanded category every row would otherwise repeat the name of the
  * category it is filed under, which is the one thing the reader already knows.
  */
-export function entryRow(e, { showCategory = true } = {}) {
+/*
+ * `swipe` wraps the row in a track with a delete surface underneath it.
+ *
+ * Off inside the Insights expansion, which is a card showing what is in a category
+ * rather than the ledger itself - a destructive gesture belongs where the list is,
+ * not everywhere a row is drawn. The row itself is unchanged either way, so the two
+ * cannot drift apart.
+ */
+export function entryRow(e, { showCategory = true, swipe = true } = {}) {
   const cat = category(e.category);
   const income = e.direction === 'in';
   const tone = income ? 'is-in' : 'is-out';
-  return `
+  const row = `
     <button class="row" data-entry="${esc(e.id)}" type="button">
       <span class="row-date">
         <span class="row-date-mon">${esc(monthShortOf(e.date))}</span>
@@ -88,6 +96,19 @@ export function entryRow(e, { showCategory = true } = {}) {
         <span class="row-amount money ${tone}">${esc(signedMoney(e.amount, e.direction))}</span>
       </span>
     </button>`;
+
+  if (!swipe) return row;
+
+  // aria-hidden on the surface: it is a target for a thumb, not a control. The
+  // keyboard and screen-reader route to the same action is the delete button inside
+  // the detail sheet, which every row already opens.
+  return `
+    <div class="row-swipe" data-swipe data-swipe-entry="${esc(e.id)}">
+      <div class="row-swipe-action" aria-hidden="true">
+        ${icon('trash-simple')}<span class="row-swipe-label">Delete</span>
+      </div>
+      ${row}
+    </div>`;
 }
 
 /** A list section header: the section's mark, its name, and an optional control. */
@@ -114,7 +135,8 @@ function searchField(query) {
   return `
     <div class="search-inline">
       <input class="input search-input" id="search-inline" type="search" autocomplete="off"
-        placeholder="Search transactions" value="${esc(query)}" aria-label="Search transactions">
+        placeholder="Search, or 21-06-2025, d:21, m:2025-05, &gt;500" value="${esc(query)}"
+        aria-label="Search transactions">
       <span class="search-inline-icon">${icon('magnifying-glass')}</span>
     </div>`;
 }
@@ -164,16 +186,26 @@ export function txnRows(entries, options) {
 /** The line under the field that reports what the query matched. */
 export function searchNote(result, monthName) {
   if (!result.query) return '';
+
+  // A date that cannot exist is answered rather than searched for.
+  if (result.dateImpossible) {
+    return `<p class="search-note">${esc(result.dateLabel)}.</p>`;
+  }
+
+  // A date term is said back in words. A year typed wrong otherwise looks exactly
+  // like a month with nothing in it.
+  const where = result.dateLabel ? esc(result.dateLabel) : esc(monthName);
+
   if (result.entries.length) {
-    return `<p class="search-note">${result.entries.length} in ${esc(monthName)}
+    return `<p class="search-note">${result.entries.length} in ${where}
       <span class="dot-sep"></span> ${esc(money(result.spent))} spent</p>`;
   }
   if (result.elsewhere > 0) {
-    return `<p class="search-note">Nothing in ${esc(monthName)}.
+    return `<p class="search-note">Nothing in ${where}.
       <button class="link-btn" data-action="search-all" type="button">
         ${result.elsewhere} match${result.elsewhere === 1 ? '' : 'es'} in other months</button></p>`;
   }
-  return `<p class="search-note">No transaction matches that.</p>`;
+  return `<p class="search-note">No transaction matches${result.dateLabel ? ` in ${where}` : ' that'}.</p>`;
 }
 
 function emptyState(title, body, actionLabel, actionId) {
@@ -471,7 +503,7 @@ export function screenInsights(ctx) {
       </button>
       ${on ? `<div class="cat-expand">${txnRows(
         ctx.entries.filter((e) => e.category === t.id && e.direction === 'out'),
-        { showCategory: false }
+        { showCategory: false, swipe: false }
       )}</div>` : ''}`;
   }).join('');
 

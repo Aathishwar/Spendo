@@ -113,6 +113,57 @@ function setStatus(next, error = null) {
   announce();
 }
 
+/*
+ * Records the device is holding back on purpose.
+ *
+ * A delete is undoable for six seconds, and the sync debounce is two - so the
+ * tombstone reached Postgres, and the undo pushed a second write to take it back.
+ * Nothing was lost, because last-write-wins handles that pair correctly, but the row
+ * spent a moment deleted in a database on the strength of a gesture the person had
+ * not finished making.
+ *
+ * So a deleted record is held out of the push until its undo window closes. It is
+ * still a tombstone on the device the instant it is swiped - that is what makes the
+ * row vanish and survive a reload - it simply does not travel yet.
+ *
+ * If the app is killed inside the window the hold dies with it, and the tombstone
+ * syncs on the next boot. That is correct: the delete did happen, and only the offer
+ * to undo it was lost.
+ */
+const held = new Map();          // id -> the time it may be sent
+
+function isHeld(id) {
+  const until = held.get(id);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  held.delete(id);               // expired, and this is the cheapest place to notice
+  return false;
+}
+
+/** Keep these ids out of the next push for `ms`. */
+export function holdBack(ids, ms) {
+  const until = Date.now() + ms;
+  for (const id of ids) held.set(id, until);
+}
+
+/** Let them go now - the undo window closed, or the undo was taken. */
+export function release(ids) {
+  for (const id of ids) held.delete(id);
+  syncSoon();
+}
+
+/**
+ * The dirty set, minus what the server has already refused and what is still under
+ * an undo offer. Every caller that builds a push goes through this.
+ */
+function sendableChanges() {
+  const { entries, months } = store.pendingChanges();
+  return {
+    entries: entries.filter((e) => !isHeld(e.id)),
+    months
+  };
+}
+
 /* -------------------------------------------------------------------- one round */
 
 async function postSync(body) {
@@ -182,7 +233,7 @@ async function run(reason) {
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const { entries, months } = store.pendingChanges();
+      const { entries, months } = sendableChanges();
       const { cursor } = store.syncMeta();
 
       const out = await postSync({ since: cursor, entries, months });
@@ -241,7 +292,7 @@ function scheduleRetry() {
 
 /** How much of the dirty set the server has not already refused. */
 function sendableCount() {
-  const { entries, months } = store.pendingChanges();
+  const { entries, months } = sendableChanges();
   return entries.filter((e) => !rejected.has(e.id)).length
        + months.filter((m) => !rejected.has(m.ym)).length;
 }
@@ -281,7 +332,7 @@ export function startSync() {
   // A last go while the tab is being closed. keepalive lets the request outlive the
   // page, which a normal fetch would not.
   window.addEventListener('pagehide', () => {
-    const { entries, months } = store.pendingChanges();
+    const { entries, months } = sendableChanges();
     if (!entries.length && !months.length) return;
     if (!isSignedIn() || !navigator.onLine) return;
     try {

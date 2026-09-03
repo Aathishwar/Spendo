@@ -11,7 +11,8 @@ import * as store from './store.js';
 import * as sync from './sync.js';
 import * as ui from './ui.js';
 import {
-  currentYM, longDate, money, monthLabel, plural, shiftYM, todayISO, ymOf
+  currentYM, daysInMonth, longDate, money, monthLabel, plural, shiftYM, todayISO,
+  yesterdayISO, ymOf
 } from './format.js';
 import { categoriesFor, category, defaultCategory } from './categories.js';
 import * as account from './identity.js';
@@ -753,7 +754,12 @@ function maybeNudgeSignIn() {
 
 /* ---------------------------------------------------------------- snackbar */
 
-const SNACK_LIFE = 3000;
+/*
+ * Six seconds, which is what the CSS countdown and the documentation have both said
+ * all along while the code said three. Long enough to notice a row leave and change
+ * your mind, short enough that a delete does not feel provisional.
+ */
+const SNACK_LIFE = 6000;
 
 /**
  * Report what just happened, and offer to reverse it if it can be reversed.
@@ -813,6 +819,8 @@ function hideSnack() {
   clearTimeout(snackTimer);
   snack.classList.remove('is-open');
   pendingUndo = null;
+  // The offer is off the screen, so the deletes behind it are final and may sync.
+  settleDeletes();
 }
 
 /* --------------------------------------------------------- chart pin readout */
@@ -947,6 +955,229 @@ function bindPinnableChart(wrap, columns, readout) {
   chartDismissers.push(dismiss);
 }
 
+/* ------------------------------------------------------------------ delete */
+
+/*
+ * One delete path, whether it came from a swipe or from the detail sheet.
+ *
+ * Deletes BATCH. Swiping is fast enough that three rows go in under six seconds, and
+ * three stacked snackbars each with their own countdown is not an offer to undo, it
+ * is a pile of things to dismiss. They collapse into one bar - "3 deleted" - with
+ * one Undo that puts all three back, and the timer restarts on each so the last one
+ * still gets its full six seconds.
+ *
+ * Nothing reaches the server until that timer runs out. See holdBack in sync.js.
+ */
+let undoBatch = [];
+
+function deleteEntry(id) {
+  const removed = store.removeEntry(id);
+  if (!removed) return;
+
+  undoBatch.push({ id, label: removed.description || category(removed.category).label });
+  sync.holdBack(undoBatch.map((d) => d.id), SNACK_LIFE + 500);
+
+  render();
+
+  const message = undoBatch.length === 1
+    ? `Deleted ${undoBatch[0].label}`
+    : `${undoBatch.length} deleted`;
+
+  showSnack(message, 'Undo', undoDeletes, 'trash-simple');
+}
+
+/*
+ * Put them all back, and let the restored rows arrive with an animation so the list
+ * does not simply blink and be different.
+ */
+function undoDeletes() {
+  const batch = undoBatch;
+  undoBatch = [];
+  if (!batch.length) return;
+
+  for (const { id } of batch) store.restoreEntry(id);
+  sync.release(batch.map((d) => d.id));
+  render();
+
+  for (const { id } of batch) {
+    const track = view.querySelector(`[data-swipe-entry="${CSS.escape(id)}"]`);
+    if (track) track.classList.add('is-restored');
+  }
+}
+
+/*
+ * The window closed with no undo taken, so the deletes are real: let them travel.
+ *
+ * Called when the snackbar goes, however it goes - timed out, replaced by another
+ * message, or dismissed - because in every one of those cases the offer is gone from
+ * the screen and holding the records back any longer would just be a delay nobody
+ * can see.
+ */
+function settleDeletes() {
+  if (!undoBatch.length) return;
+  const ids = undoBatch.map((d) => d.id);
+  undoBatch = [];
+  sync.release(ids);
+}
+
+/* ------------------------------------------------------------------- swipe */
+
+/*
+ * Swipe a row left to delete it.
+ *
+ * Three numbers decide everything. Below SLOP the gesture has not started, which is
+ * what keeps a tap a tap and a scroll a scroll. Past COMMIT a release deletes. Past
+ * THROW it deletes on the spot, because a hard flick is a decision already made and
+ * making someone hold on to finish it feels like the app doubting them.
+ *
+ * Left only. Right is where Android's back gesture lives and that is not a fight
+ * worth picking on the edge of the screen.
+ */
+const SLOP = 14;          // raw: below this it is a tap or a scroll
+const COMMIT = 88;        // painted: past this a release deletes
+const THROW = 150;        // raw: past this it deletes without waiting for a release
+const MAX_PULL = 170;     // painted: the row never travels further than this
+
+let swipe = null;
+
+/** Rubber band past the point of no return, so the row cannot be dragged off screen. */
+function pull(dx) {
+  const distance = Math.min(-dx, MAX_PULL);
+  return distance <= COMMIT ? distance : COMMIT + (distance - COMMIT) * 0.35;
+}
+
+function paintSwipe(track, distance) {
+  track.style.setProperty('--swipe-x', `${-distance}px`);
+  track.style.setProperty('--swipe-reveal', String(Math.min(1, distance / COMMIT)));
+  track.classList.toggle('is-armed', distance >= COMMIT);
+}
+
+function endSwipe(track) {
+  track.classList.remove('is-dragging', 'is-armed');
+  track.style.removeProperty('--swipe-x');
+  track.style.removeProperty('--swipe-reveal');
+}
+
+view.addEventListener('pointerdown', (e) => {
+  // Mouse right-clicks and stylus barrels are not swipes, and a second finger during
+  // a swipe is not a second swipe.
+  if (e.button !== 0 || swipe) return;
+  const track = e.target.closest('[data-swipe]');
+  if (!track || track.classList.contains('is-removing')) return;
+
+  swipe = {
+    track,
+    id: track.dataset.swipeEntry,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    axis: null,               // undecided until the finger has moved enough to say
+    distance: 0
+  };
+});
+
+view.addEventListener('pointermove', (e) => {
+  if (!swipe || e.pointerId !== swipe.pointerId) return;
+
+  const dx = e.clientX - swipe.startX;
+  const dy = e.clientY - swipe.startY;
+
+  /*
+   * The axis is decided ONCE, on the first movement past the slop, and never
+   * revisited. Deciding continuously is what makes a list feel like it is arguing
+   * with the thumb: a diagonal drag would flip between scrolling and swiping.
+   */
+  if (!swipe.axis) {
+    if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
+    if (Math.abs(dy) > Math.abs(dx) || dx > 0) {
+      swipe = null;           // vertical, or rightwards: it belongs to the page
+      return;
+    }
+    swipe.axis = 'x';
+    swipe.track.classList.add('is-dragging');
+    // From here the row follows this pointer even if the finger leaves the row,
+    // which it does on any swipe that starts near the bottom edge of one.
+    //
+    // Guarded, because capture throws if the browser no longer considers the pointer
+    // active - a touch that ended between two frames, or a synthetic event. Losing
+    // capture makes the drag less forgiving; letting the throw escape would abandon
+    // the gesture halfway with the row still translated.
+    try {
+      swipe.track.setPointerCapture(e.pointerId);
+    } catch {
+      /* no capture, but the drag still works while the finger is over the row */
+    }
+  }
+
+  swipe.distance = pull(dx);
+  paintSwipe(swipe.track, swipe.distance);
+
+  /*
+   * The throw is measured on the RAW drag, not on the damped one.
+   *
+   * `pull` caps what the row can move to about 117px, so comparing the painted
+   * distance against a 150px threshold made the throw unreachable - the gesture was
+   * dead code that tested as "nothing happens on a hard flick". The rubber band is
+   * how far the row travels; the finger is what the intent is read from.
+   */
+  if (-dx >= THROW) {
+    const { track, id } = swipe;
+    swipe = null;
+    removeRow(track, id);
+  }
+});
+
+for (const event of ['pointerup', 'pointercancel']) {
+  view.addEventListener(event, (e) => {
+    if (!swipe || e.pointerId !== swipe.pointerId) return;
+    const { track, id, distance, axis } = swipe;
+    swipe = null;
+
+    if (axis !== 'x') return;
+    if (distance >= COMMIT) removeRow(track, id);
+    else endSwipe(track);     // springs back on its own transition
+  });
+}
+
+/*
+ * A drag that ends on the row would otherwise also be a click, and the click opens
+ * the detail sheet. Captured, so it is stopped before the delegated handler below
+ * ever sees it.
+ */
+view.addEventListener('click', (e) => {
+  const track = e.target.closest('[data-swipe]');
+  if (track && (track.classList.contains('is-dragging') || track.classList.contains('is-removing'))) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);
+
+/**
+ * Play the row out, then delete it.
+ *
+ * The height is pinned to a number first because a height transition needs something
+ * to count down from, and `auto` is not a number. The store is not touched until the
+ * animation has finished, so a re-render cannot pull the row out from under it.
+ */
+function removeRow(track, id) {
+  track.classList.remove('is-dragging', 'is-armed');
+  track.style.height = `${track.offsetHeight}px`;
+  void track.offsetHeight;                 // let the browser see that height first
+  track.classList.add('is-removing');
+
+  const done = () => {
+    track.removeEventListener('transitionend', onEnd);
+    clearTimeout(fallback);
+    deleteEntry(id);
+  };
+  const onEnd = (e) => { if (e.propertyName === 'height') done(); };
+  track.addEventListener('transitionend', onEnd);
+  // transitionend does not fire if the element is hidden mid-animation - a tab
+  // change, or reduced motion collapsing the duration. The delete must not depend
+  // on an event that may never arrive.
+  const fallback = setTimeout(done, 500);
+}
+
 /* ------------------------------------------------------------------ search */
 
 /**
@@ -954,12 +1185,134 @@ function bindPinnableChart(wrap, columns, readout) {
  * the rest of search in phase 5. Anything that is not an operator is a keyword and
  * all keywords must match, which is how the old `/search coffee zomato` behaved.
  */
-function parseQuery(query) {
+/*
+ * The date half of the query language, which the Telegram bot had and this did not.
+ *
+ * Every form is written the way the date is written everywhere else in this app -
+ * day first - because a search box that wants ISO while the screen shows 21-06-2025
+ * is a box people stop typing dates into.
+ *
+ *   d:21                  the 21st of the month on screen
+ *   21-06-2025            one day
+ *   21-06-2025..25-06     a range; the second date may leave off what it shares
+ *   m:2025-05             a whole month
+ *   today, yesterday      the two that get typed most
+ *
+ * Parsing returns a plain { from, to } of YYYY-MM-DD strings, inclusive at both
+ * ends, and matching is a pair of string comparisons - which is exact, because the
+ * dates are stored as those same strings and never as a Date. A Date here would
+ * introduce the one bug this app has been careful to avoid everywhere else: an
+ * expense on the 1st landing on the 31st because a timezone moved it backwards.
+ */
+const DMY = /^(\d{1,2})-(\d{1,2})-(\d{4})$/;
+const DM = /^(\d{1,2})-(\d{1,2})$/;
+
+const pad = (n) => String(n).padStart(2, '0');
+
+/** "21-06-2025" to "2025-06-21", or null. The year may be borrowed from a partner. */
+function dmyToISO(text, fallbackYear) {
+  let m = text.match(DMY);
+  if (m) return `${m[3]}-${pad(m[2])}-${pad(m[1])}`;
+  m = text.match(DM);
+  if (m && fallbackYear) return `${fallbackYear}-${pad(m[2])}-${pad(m[1])}`;
+  return null;
+}
+
+const lastDayOf = (ymText) => {
+  const [y, mo] = ymText.split('-').map(Number);
+  return `${ymText}-${pad(new Date(Date.UTC(y, mo, 0)).getUTCDate())}`;
+};
+
+/**
+ * One token to a date range, or null if it is not a date at all.
+ *
+ * `viewYM` is the month on screen, which is what makes `d:21` mean anything: the
+ * bare day belongs to the month being looked at, not to the current one.
+ */
+function dateToken(token, viewYM) {
+  let m;
+
+  if (token === 'today') {
+    const t = todayISO();
+    return { from: t, to: t };
+  }
+  if (token === 'yesterday') {
+    const y = yesterdayISO();
+    return { from: y, to: y };
+  }
+
+  // d:21 - a day of the month on screen
+  if ((m = token.match(/^d:(\d{1,2})$/))) {
+    const day = Number(m[1]);
+    if (day < 1 || day > 31) return null;
+    /*
+     * A day that month does not have is answered, not silently searched for. `d:31`
+     * in September used to report "no transaction matches in 31 September 2026",
+     * which names a date that does not exist and reads as though the app had looked
+     * and found nothing. The range is impossible on purpose - nothing can match - and
+     * the note says why.
+     */
+    if (day > daysInMonth(viewYM)) {
+      return { from: '9999-12-31', to: '0000-01-01', invalid: `${monthLabel(viewYM)} has no ${ordinal(day)}` };
+    }
+    const iso = `${viewYM}-${pad(day)}`;
+    return { from: iso, to: iso };
+  }
+
+  // m:2025-05 - a whole month
+  if ((m = token.match(/^m:(\d{4})-(\d{1,2})$/))) {
+    const monthText = `${m[1]}-${pad(m[2])}`;
+    return { from: `${monthText}-01`, to: lastDayOf(monthText) };
+  }
+
+  // 21-06-2025..25-06-2025, and the shorthand that drops the repeated year
+  if (token.includes('..')) {
+    const [rawFrom, rawTo] = token.split('..');
+    const from = dmyToISO(rawFrom);
+    if (!from) return null;
+    const to = dmyToISO(rawTo, from.slice(0, 4));
+    if (!to) return null;
+    // Typed backwards is a typo, not an empty result.
+    return from <= to ? { from, to } : { from: to, to: from };
+  }
+
+  const single = dmyToISO(token);
+  if (single) return { from: single, to: single };
+
+  return null;
+}
+
+/** 21st, 22nd, 23rd, 24th. Used only to say a day back to the reader. */
+function ordinal(n) {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+}
+
+/** Two ranges narrow to their overlap, so two date terms mean "both", like keywords. */
+function narrow(current, next) {
+  if (!current) return next;
+  if (current.invalid) return current;
+  if (next.invalid) return next;
+  return {
+    from: current.from > next.from ? current.from : next.from,
+    to: current.to < next.to ? current.to : next.to
+  };
+}
+
+function parseQuery(query, viewYM = ym) {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const f = { keywords: [], min: null, max: null, exact: null };
+  const f = { keywords: [], min: null, max: null, exact: null, date: null };
 
   for (const t of tokens) {
     let m;
+
+    const range = dateToken(t, viewYM);
+    if (range) {
+      f.date = narrow(f.date, range);
+      continue;
+    }
+
     if ((m = t.match(/^(>=|<=|>|<)(\d+(?:\.\d{1,2})?)$/))) {
       const v = parseFloat(m[2]);
       if (m[1] === '>') f.min = v + 0.01;
@@ -978,7 +1331,31 @@ function parseQuery(query) {
   return f;
 }
 
+/** "21 June", or "21-25 June", or "June 2025". What the note says back. */
+function describeRange({ from, to, invalid }) {
+  if (invalid) return invalid;
+  const day = (iso) => Number(iso.slice(8, 10));
+  const monthOf = (iso) => monthLabel(iso.slice(0, 7));
+
+  if (from === to) return `${day(from)} ${monthOf(from)}`;
+
+  const wholeMonth = from.slice(0, 7) === to.slice(0, 7)
+    && day(from) === 1
+    && to === lastDayOf(from.slice(0, 7));
+  if (wholeMonth) return monthOf(from);
+
+  if (from.slice(0, 7) === to.slice(0, 7)) {
+    return `${day(from)}-${day(to)} ${monthOf(from)}`;
+  }
+  return `${day(from)} ${monthOf(from)} to ${day(to)} ${monthOf(to)}`;
+}
+
 function matches(e, f) {
+  // Dates are compared as the strings they are stored as. YYYY-MM-DD sorts
+  // lexicographically in date order, which is the whole reason the app writes them
+  // that way, so this needs no parsing and cannot be moved by a timezone.
+  if (f.date && (e.date < f.date.from || e.date > f.date.to)) return false;
+
   const hay = `${e.description} ${category(e.category).label}`.toLowerCase();
   if (!f.keywords.every((k) => hay.includes(k))) return false;
   if (f.exact !== null && e.amount !== f.exact) return false;
@@ -1003,14 +1380,19 @@ function runSearch(entries, query) {
   if (!found.length) {
     for (const m of store.months()) {
       if (m === ym) continue;
-      elsewhere += store.entriesFor(m).filter((e) => matches(e, f)).length;
+      elsewhere += store.entriesFor(m).filter((e) => matches(e, parseQuery(query, m))).length;
     }
   }
   return {
     query,
     entries: found,
     spent: found.reduce((a, e) => a + (e.direction === 'out' ? e.amount : 0), 0),
-    elsewhere
+    elsewhere,
+    // Said back in words by the note under the field. A date term that parsed into
+    // something other than what was meant is otherwise indistinguishable from a
+    // month with nothing in it.
+    dateLabel: f.date ? describeRange(f.date) : '',
+    dateImpossible: Boolean(f.date && f.date.invalid)
   };
 }
 
@@ -1031,8 +1413,10 @@ function updateSearchResults() {
 
 /** Jump to the most recent month that has a match for the current query. */
 function searchAllMonths() {
-  const f = parseQuery(search.query);
   for (const m of store.months()) {
+    // Parsed against each month in turn, because `d:21` means "the 21st of the month
+    // you are looking at" - and while this walks the list, that month keeps changing.
+    const f = parseQuery(search.query, m);
     if (store.entriesFor(m).some((e) => matches(e, f))) {
       ym = m;
       render();
@@ -1404,19 +1788,10 @@ document.addEventListener('click', (e) => {
       break;
     case 'signin-resend': sendCode(signin.email, { resend: true }); break;
 
-    case 'delete-entry': {
-      const id = el.dataset.entry;
-      const removed = store.removeEntry(id);
+    case 'delete-entry':
       closeSheet();
-      render();
-      if (removed) {
-        showSnack(`Deleted ${removed.description || category(removed.category).label}`, 'Undo', () => {
-          store.restoreEntry(id);
-          render();
-        }, 'trash-simple');
-      }
+      deleteEntry(el.dataset.entry);
       break;
-    }
 
     case 'snack-action':
       if (pendingUndo) pendingUndo();

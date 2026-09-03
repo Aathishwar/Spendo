@@ -743,6 +743,104 @@ button { font: inherit; color: inherit; }
 .group-rows > :last-child  { border-radius: 0 0 var(--r-card) var(--r-card); }
 .group-rows > :only-child  { border-radius: var(--r-card); }
 
+/* ------------------------------------------------------------------- swipe */
+
+/*
+ * Swipe a row left to delete it.
+ *
+ * The row sits on a track with the delete surface underneath, so nothing is created
+ * or destroyed mid-gesture: the row moves and what was always behind it is revealed.
+ *
+ * `touch-action: pan-y` is the load-bearing line. Without it the browser claims the
+ * drag for the page and the row never moves; with it, vertical belongs to the list
+ * and horizontal to us, decided by the browser rather than by a fight between two
+ * handlers.
+ */
+.row-swipe {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  touch-action: pan-y;
+}
+
+.row-swipe-action {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-inline-end: var(--space-4);
+  background: var(--spend-tint);
+  color: var(--spend);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  /* Fades in with the drag, so a half-swipe reads as "not yet" rather than as a
+     control that is already armed. app.js sets the custom property. */
+  opacity: var(--swipe-reveal, 0);
+}
+.row-swipe-action .icon { width: 1.15rem; height: 1.15rem; }
+
+/*
+ * The row rides above it. The transition is on by default so a release springs back,
+ * and is turned OFF while a finger is down - a transition during a drag is a row
+ * that lags behind the thumb.
+ */
+.row-swipe > .row {
+  position: relative;
+  transform: translateX(var(--swipe-x, 0));
+  transition: transform 180ms var(--ease);
+}
+.row-swipe.is-dragging > .row { transition: none; }
+
+/* Past the point where a release would delete, the label commits: full strength,
+   and the icon steps up so the change is felt as much as seen. */
+.row-swipe.is-armed .row-swipe-action { opacity: 1; }
+.row-swipe.is-armed .row-swipe-action .icon { transform: scale(1.12); }
+.row-swipe-action .icon { transition: transform var(--dur-state) var(--ease); }
+
+/*
+ * Leaving, in two stages, and the second is the one usually left out.
+ *
+ * The row slides out and fades; THEN the track collapses its own height, so the rows
+ * below rise into the gap instead of jumping up the moment the row is gone. app.js
+ * pins the height in pixels first, because a height animation needs a number to
+ * count down from and `auto` is not one.
+ */
+.row-swipe.is-removing > .row {
+  transform: translateX(-100%);
+  opacity: 0;
+  transition: transform 200ms var(--ease-exit), opacity 160ms var(--ease-exit);
+}
+.row-swipe.is-removing {
+  height: 0 !important;
+  opacity: 0;
+  transition: height 180ms var(--ease-exit) 120ms, opacity 120ms var(--ease-exit) 160ms;
+}
+
+/*
+ * Coming back from an undo: the same two stages in reverse, so a restored row
+ * arrives looking like a row that was just added - which is what it is.
+ */
+.row-swipe.is-restored {
+  animation: row-restore 260ms var(--ease) backwards;
+}
+@keyframes row-restore {
+  from { opacity: 0; transform: translateY(-6px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+/*
+ * Reduced motion keeps the meaning and drops the movement: rows still leave and
+ * arrive, they just do it by fading.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .row-swipe > .row,
+  .row-swipe.is-removing > .row,
+  .row-swipe.is-removing { transition-duration: 1ms; transition-delay: 0ms; }
+  .row-swipe.is-restored { animation-duration: 1ms; }
+}
+
 .row-date {
   flex: none;
   display: flex;
