@@ -683,6 +683,17 @@ button { font: inherit; color: inherit; }
 .list-scroll.is-scrollable .group-rows { overflow-y: auto; }
 
 /*
+ * The rows keep their own height inside that window.
+ *
+ * `.group-rows` is a flex column and the window gives it a fixed height, so its
+ * children were free to shrink to make the last one fit: a 65px row squeezed toward
+ * its 48px min-height, the second line of it - the category - clipped by the hairline
+ * belonging to the row underneath. A row is not a thing that stretches to fill, it is
+ * a thing of a size, so it says so and the window scrolls instead.
+ */
+.list-scroll .group-rows > * { flex: none; }
+
+/*
  * The ledger's total line, sitting in the band the Add button floats in.
  *
  * padding-right, not a shorter width: the line is left aligned and the button owns
