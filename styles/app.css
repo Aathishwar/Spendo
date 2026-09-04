@@ -1906,3 +1906,345 @@ button { font: inherit; color: inherit; }
   }
   .nav-item .nav-pill { transform: none; }
 }
+
+/* ====================================================== several at once ==== */
+
+/*
+ * The way in, parked at the far end of the add sheet's own title bar.
+ *
+ * `margin-left: auto` rather than a spacer, so the title keeps its natural width
+ * and the control sits against the edge whatever language the label is in.
+ */
+.sheet-head-action {
+  margin-left: auto;
+  flex: none;
+}
+
+/* Prose that introduces a sheet, as against a caption under a card. */
+.sheet-note {
+  font-size: var(--text-body);
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin: 0;
+  text-wrap: pretty;
+}
+.sheet-note em { font-style: normal; color: var(--ink); font-weight: var(--weight-medium); }
+
+/* A refusal that belongs to the sheet rather than to one field in it. */
+.field-error-block {
+  font-size: var(--text-body);
+  line-height: 1.45;
+  color: var(--spend);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+
+/* --------------------------------------------------------------- the mic */
+
+.voice-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+/*
+ * One large target and nothing near it.
+ *
+ * 88px because this is pressed while talking rather than while looking, and because
+ * the thing it does - start recording - is the one action on the screen. Everything
+ * else on this sheet is deliberately smaller than it.
+ */
+.voice-orb {
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  color: var(--on-brand);
+  cursor: pointer;
+  transition: transform var(--dur-instant) var(--ease), background var(--dur-state) var(--ease);
+}
+.voice-orb:active { transform: scale(var(--press-scale)); }
+.voice-orb .icon { width: 2.25rem; height: 2.25rem; }
+
+/*
+ * Listening, drawn as a ring that keeps leaving.
+ *
+ * It is a box-shadow rather than a second element because a shadow costs no layout
+ * and cannot be caught by a tap; the button underneath stays exactly the size of its
+ * own target while the halo goes past it.
+ */
+.voice-orb.is-live {
+  background: var(--spend);
+  color: #fff;
+  animation: voice-pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes voice-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--spend) 45%, transparent); }
+  70%  { box-shadow: 0 0 0 22px color-mix(in srgb, var(--spend) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--spend) 0%, transparent); }
+}
+
+.voice-status {
+  font-size: var(--text-body);
+  color: var(--ink-2);
+  margin: 0;
+  text-align: center;
+}
+.voice-status-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+/* Three dots that are one dot, moving. Small enough to sit on a line of text. */
+.dot-pulse {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  animation: dot-pulse 1.2s var(--ease) infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.75); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+/*
+ * The words as they arrive, in a box that does not resize under the reader.
+ *
+ * A min-height rather than a fixed one: speech recognition revises what it has
+ * heard, so the text shortens as often as it lengthens, and a box that tracked it
+ * exactly would jump on every revision.
+ */
+.voice-heard {
+  min-height: 5.5rem;
+  padding: var(--space-4);
+  border-radius: var(--r-card);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-size: var(--text-row);
+  line-height: 1.5;
+}
+.voice-heard-empty { color: var(--ink-3); }
+
+/* What is being read, quoted back so the reader can see what it heard. */
+.voice-quote {
+  margin: 0;
+  padding-left: var(--space-4);
+  border-left: 3px solid var(--line-strong);
+  color: var(--ink-2);
+  font-size: var(--text-body);
+  line-height: 1.5;
+}
+
+.input-area {
+  min-height: 5.5rem;
+  padding: var(--space-3) var(--space-4);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* ------------------------------------------------------------ the drafts */
+
+.bulk-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/*
+ * A row that is off is dimmed, not hidden and not struck through.
+ *
+ * It has to stay readable: the reason someone unticks a row is usually that the
+ * amount is wrong, and the next thing they may do is tick it again after fixing it.
+ * A row that disappeared would make that a re-dictation.
+ */
+.bulk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--r-card);
+  background: var(--surface-sunken);
+  opacity: 0.55;
+  transition: opacity var(--dur-state) var(--ease);
+}
+.bulk-row.is-on { opacity: 1; }
+
+.bulk-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-top: var(--space-2);
+  border: 2px solid var(--line-strong);
+  border-radius: var(--r-tile);
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease),
+              color var(--dur-state) var(--ease), transform var(--dur-instant) var(--ease);
+}
+.bulk-check:active { transform: scale(var(--press-scale)); }
+.bulk-check .icon { width: 1rem; height: 1rem; }
+.bulk-row.is-on .bulk-check {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+}
+
+.bulk-fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/*
+ * Amount first, then what it was for.
+ *
+ * The unusual order is deliberate. Everywhere else in this app the description leads
+ * and the figure is read off the right-hand edge - but this is the one screen where
+ * the amount is the field most likely to be WRONG, because it came out of a
+ * microphone. Putting it under the thumb first is putting the correction first.
+ */
+.bulk-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.bulk-line .input:last-child { flex: 1; min-width: 0; }
+
+.bulk-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/*
+ * A chip that has to read as a control on a sunken ground.
+ *
+ * The default chip background IS the sunken surface, which is exactly what a review
+ * row is made of - so on this one screen the category and direction chips came out
+ * as plain text with an icon beside them, and nothing suggested they could be
+ * tapped. They take the raised surface instead, the same one the inputs beside them
+ * use, so every changeable thing in a row looks the same as every other.
+ */
+.chip-raised { background: var(--surface); }
+.chip-raised.is-selected { background: var(--brand); color: var(--on-brand); }
+
+/*
+ * A smaller input, and one that still clears the touch minimum.
+ *
+ * 44px rather than the 56px of a primary field: five of these stacked at full size
+ * is a sheet that scrolls past the button at the bottom of it, and the row is being
+ * corrected rather than filled from empty.
+ */
+.input-sm {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-row);
+  background: var(--surface);
+}
+.field-money-sm { flex: none; width: 7rem; }
+.field-money-sm .field-prefix { left: var(--space-3); font-size: 1rem; }
+.field-money-sm .input-amount {
+  padding-left: calc(var(--space-3) + 1.1rem);
+  font-size: var(--text-row);
+  font-weight: var(--weight-semibold);
+}
+
+.bulk-date {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+  font-weight: var(--weight-medium);
+}
+
+/* The picker for one row, opened under it and closed by choosing. */
+.bulk-cats { margin-top: var(--space-1); }
+
+.bulk-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ---------------------------------------------------------- the waiting */
+
+/*
+ * Bars in the shape of the rows that are coming.
+ *
+ * The shimmer travels rather than fading in place, because a fade reads as something
+ * loading and a sweep reads as something being worked on - and the second is the
+ * truth here: a model is reading a sentence, not a file arriving.
+ */
+.skeleton {
+  display: block;
+  border-radius: var(--r-tile);
+  /*
+   * The RAISED surface, not the sunken one the row is made of.
+   *
+   * Built on the sunken colour first, and between sweeps the bars were the same
+   * shade as the row behind them - three blank rounded blocks with no shape in them.
+   * A skeleton has to be legible while it is standing still: the sweep says it is
+   * working, the shapes say what is coming, and only one of those is animated.
+   */
+  background: linear-gradient(90deg,
+    var(--surface) 25%,
+    color-mix(in srgb, var(--surface) 78%, var(--ink-3)) 37%,
+    var(--surface) 63%);
+  background-size: 300% 100%;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  from { background-position: 130% 0; }
+  to   { background-position: -30% 0; }
+}
+
+.bulk-skeleton {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--r-card);
+  background: var(--surface-sunken);
+}
+.skeleton-check { flex: none; width: 28px; height: 28px; margin-top: var(--space-2); }
+.skeleton-stack { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); }
+.skeleton-line { height: 44px; }
+.skeleton-line.is-short { height: 32px; width: 62%; }
+
+/*
+ * Everything above that moves, stopped.
+ *
+ * The pulse, the sweep and the halo all exist to say "still working", and the same
+ * thing is said by the copy beside them - which is why turning them off costs the
+ * reader nothing. A looping animation is exactly what a vestibular trigger looks
+ * like, and these three loop for as long as the wait lasts.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb.is-live,
+  .dot-pulse,
+  .skeleton {
+    animation: none;
+  }
+  .skeleton { background: var(--surface); }
+  .dot-pulse { opacity: 1; }
+}

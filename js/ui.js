@@ -423,7 +423,11 @@ function tipsCard(tips) {
 
   const body = () => {
     if (t.busy) {
-      return `<p class="card-note">Reading your last few months...</p>`;
+      return `
+        <p class="voice-status voice-status-inline">
+          <span class="dot-pulse" aria-hidden="true"></span>
+          <span aria-live="polite">${esc(readingCopy(t.elapsed || 0, { what: 'your last few months', seconds: 30 }))}</span>
+        </p>`;
     }
     if (t.items && t.items.length) {
       return `
@@ -439,7 +443,9 @@ function tipsCard(tips) {
         </div>`;
     }
     if (!t.possible) {
-      return `<p class="card-note">Sign in to have your last few months read and three changes suggested.</p>`;
+      return `<p class="card-note">${t.off
+        ? 'AI is off. Turn it on in Settings to have your last few months read.'
+        : 'Sign in to have your last few months read and three changes suggested.'}</p>`;
     }
     return `
       <p class="card-note">${t.error
@@ -685,7 +691,7 @@ function installRows(install) {
 }
 
 export function screenSettings(ctx) {
-  const { ym, stats, theme } = ctx;
+  const { ym, stats, theme, ai } = ctx;
 
   const themeRow = `
     <div class="field-row">
@@ -695,6 +701,26 @@ export function screenSettings(ctx) {
           ${['system', 'light', 'dark'].map((t) => `
             <button type="button" class="seg-btn ${theme === t ? 'is-selected' : ''}"
               data-theme="${t}" aria-pressed="${theme === t}">${t[0].toUpperCase()}${t.slice(1)}</button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+
+  /*
+   * On and Off rather than a switch, and worded as a state rather than an action.
+   *
+   * A lone toggle in a list row makes the reader work out which way is on from the
+   * position of a knob; two labelled halves with one of them pressed says it. It is
+   * also the same control as Theme directly above it, and a settings screen with two
+   * different idioms for the same kind of choice reads as two screens.
+   */
+  const aiRow = `
+    <div class="field-row">
+      <span class="field-row-label">Use AI</span>
+      <div class="field-row-control">
+        <div class="seg" role="group" aria-label="Use AI">
+          ${[['on', true], ['off', false]].map(([label, value]) => `
+            <button type="button" class="seg-btn ${ai === value ? 'is-selected' : ''}"
+              data-ai="${label}" aria-pressed="${ai === value}">${label[0].toUpperCase()}${label.slice(1)}</button>`).join('')}
         </div>
       </div>
     </div>`;
@@ -732,6 +758,16 @@ export function screenSettings(ctx) {
     <section class="list">
       ${listHead('sun', 'Appearance')}
       <div class="field-rows">${themeRow}</div>
+    </section>
+
+    <section class="list">
+      ${listHead('sparkle', 'Assist')}
+      <div class="field-rows">${aiRow}</div>
+      <p class="card-note note-under">Off means nothing is sent. Categories still come from
+        your own past entries and a built-in word list, reading several at once still works
+        for a plain list like <em>200 auto, 150 lunch</em>, and the month write-up and the
+        spending suggestions stop being offered. Only the description, or the line you speak,
+        ever leaves the phone - never an amount, a date or a transaction.</p>
     </section>
 
     <section class="list">
@@ -1017,6 +1053,9 @@ export function addSheet({ direction, category: catId, date, amount, description
       <div class="sheet-head">
         <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Close">${icon('x')}</button>
         <h2 class="sheet-title">${direction === 'in' ? 'Add income' : 'Add expense'}</h2>
+        <button class="btn btn-text btn-sm sheet-head-action" data-action="open-bulk" type="button">
+          ${icon('microphone')} Several
+        </button>
       </div>
 
       <div class="seg" role="group" aria-label="Direction">
@@ -1074,6 +1113,220 @@ export function addSheet({ direction, category: catId, date, amount, description
  *
  * `editing` names the one field currently open, or is null.
  */
+/* ------------------------------------------------------- several at once */
+
+/*
+ * How long a wait is allowed to say nothing.
+ *
+ * A model call here runs 2 to 15 seconds and occasionally longer, and a progress
+ * line that never changes reads as a hang at about four. So the copy moves twice.
+ * The words are not decoration: each one tells the reader something they did not
+ * know a moment ago - that it is still going, and then that this is longer than
+ * usual and roughly when it will give up.
+ */
+const READING_COPY = [
+  [0, (what) => `Reading ${what}`],
+  [4000, () => 'Still reading - that is a long one'],
+  [12000, (what, seconds) => `Taking longer than usual. It gives up at ${seconds} seconds`]
+];
+
+/**
+ * `what` names the thing being read, and only the FIRST line uses it.
+ *
+ * "Reading that" and "Reading your last few months" are both sentences. Appending the
+ * subject to every stage is not - the second line came out as "Still reading - that is
+ * a long one your last few months", which is what happens when a phrase is treated as
+ * a prefix instead of as a sentence.
+ */
+export function readingCopy(elapsed, { what = 'that', seconds = 25 } = {}) {
+  let line = READING_COPY[0][1];
+  for (const [at, copy] of READING_COPY) if (elapsed >= at) line = copy;
+  return line(what, seconds);
+}
+
+/*
+ * Grey bars in the shape of the rows that are coming.
+ *
+ * Three of them, always, because the count is not known yet and a skeleton that
+ * guesses the count wrong is a layout that jumps when the real rows arrive. Three
+ * is what a spoken list usually is, and the sheet is scrolled to the top either way.
+ */
+function skeletonRows(n = 3) {
+  return `<div class="bulk-list" aria-hidden="true">${Array.from({ length: n }, () => `
+    <div class="bulk-skeleton">
+      <span class="skeleton skeleton-check"></span>
+      <span class="skeleton-stack">
+        <span class="skeleton skeleton-line"></span>
+        <span class="skeleton skeleton-line is-short"></span>
+      </span>
+    </div>`).join('')}</div>`;
+}
+
+/*
+ * One draft, with every field still changeable.
+ *
+ * The checkbox starts ticked. That is the whole argument for letting a model near
+ * an amount at all: the default is "these look right", the work is unticking the
+ * one that is not, and nothing has been written to the ledger either way. A row
+ * that started unticked would make the person confirm four things that were already
+ * correct in order to fix the fifth.
+ *
+ * Amount and description are real inputs rather than tap-to-edit fields, because
+ * mishearing is the expected failure here and a field you can already type in is
+ * one tap fewer than a field you have to open first.
+ */
+function bulkRow(row, editing) {
+  const cat = category(row.category);
+  const income = row.direction === 'in';
+  const cats = orderedCats(categoriesFor(row.direction), row.category);
+
+  return `
+    <div class="bulk-row ${row.on ? 'is-on' : ''}" data-bulk-row="${esc(row.key)}">
+      <button type="button" class="bulk-check" data-action="bulk-toggle" data-row="${esc(row.key)}"
+        role="checkbox" aria-checked="${row.on}"
+        aria-label="${row.on ? 'Do not add' : 'Add'} ${esc(row.description || 'this entry')}">
+        ${icon('check-bold')}
+      </button>
+
+      <div class="bulk-fields">
+        <div class="bulk-line">
+          <span class="field-money field-money-sm">
+            <span class="field-prefix">${icon('currency-inr')}</span>
+            <input class="input input-sm input-amount money" name="amt-${esc(row.key)}" type="text"
+              inputmode="decimal" autocomplete="off" value="${esc(String(row.amount))}"
+              aria-label="Amount">
+          </span>
+          <input class="input input-sm" name="desc-${esc(row.key)}" type="text" autocomplete="off"
+            placeholder="What was it for" value="${esc(row.description)}"
+            aria-label="Description">
+        </div>
+
+        <div class="bulk-meta">
+          <button type="button" class="chip chip-sm chip-raised ${editing ? 'is-selected' : ''}"
+            data-action="bulk-category" data-row="${esc(row.key)}"
+            aria-expanded="${Boolean(editing)}">
+            ${icon(cat.icon)} ${esc(cat.label)}
+          </button>
+
+          <button type="button" class="chip chip-sm chip-raised"
+            data-action="bulk-direction" data-row="${esc(row.key)}"
+            aria-label="Change direction. Currently ${income ? 'received' : 'paid'}">
+            ${imgIcon(income ? 'received' : 'paid')} ${income ? 'In' : 'Out'}
+          </button>
+
+          ${row.date === todayISO() ? '' : `<span class="bulk-date">${esc(friendlyDate(row.date))}</span>`}
+        </div>
+
+        ${editing ? `
+          <div class="chip-row bulk-cats" role="group" aria-label="Category">
+            ${cats.map((c) => `
+              <button type="button" class="chip chip-sm ${c.id === row.category ? 'is-selected' : ''}"
+                data-action="bulk-set-category" data-row="${esc(row.key)}" data-cat="${esc(c.id)}"
+                aria-pressed="${c.id === row.category}">
+                ${icon(c.icon)} ${esc(c.label)}
+              </button>`).join('')}
+          </div>` : ''}
+      </div>
+    </div>`;
+}
+
+/**
+ * The one sheet behind the microphone, in four states.
+ *
+ * It is a single sheet rather than a flow of sheets on purpose: the person is doing
+ * one thing - getting a list of expenses in - and every state here is a moment of
+ * that one thing. A sheet that closed and reopened between speaking and reviewing
+ * would lose the thread, and losing the thread is what makes people abandon a bulk
+ * entry halfway and go back to typing them one at a time.
+ */
+export function bulkSheet(bulk) {
+  const { stage, text, heard, rows, editing, error, elapsed, supported, usedModel } = bulk;
+
+  const head = `
+    <div class="sheet-head">
+      <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Close">${icon('x')}</button>
+      <h2 class="sheet-title">Add several</h2>
+    </div>`;
+
+  const problem = error ? `<p class="field-error-block">${esc(error)}</p>` : '';
+
+  if (stage === 'listening') {
+    return `
+      <div class="sheet-body" id="bulk-sheet">
+        ${head}
+        <div class="voice-stage">
+          <button type="button" class="voice-orb is-live" data-action="voice-stop"
+            aria-label="Stop listening">${icon('stop-circle')}</button>
+          <p class="voice-status">Listening. Tap to stop.</p>
+        </div>
+        <div class="voice-heard" aria-live="polite">${heard
+          ? esc(heard)
+          : '<span class="voice-heard-empty">Say the amount, then what it was for.</span>'}</div>
+      </div>`;
+  }
+
+  if (stage === 'reading') {
+    return `
+      <div class="sheet-body" id="bulk-sheet">
+        ${head}
+        <p class="voice-status voice-status-inline">
+          <span class="dot-pulse" aria-hidden="true"></span>
+          <span aria-live="polite">${esc(readingCopy(elapsed))}</span>
+        </p>
+        <blockquote class="voice-quote">${esc(text)}</blockquote>
+        ${skeletonRows()}
+      </div>`;
+  }
+
+  if (stage === 'review') {
+    const on = rows.filter((r) => r.on).length;
+    return `
+      <form class="sheet-body" id="bulk-form">
+        ${head}
+        <p class="sheet-note">
+          ${rows.length === 1 ? 'One entry' : `${rows.length} entries`} from what you said${usedModel ? '' : ', read on this phone'}.
+          Fix anything wrong, untick anything that is not real.
+        </p>
+        ${problem}
+        <div class="bulk-list">${rows.map((r) => bulkRow(r, editing === r.key)).join('')}</div>
+        <div class="bulk-actions">
+          <button class="btn btn-primary btn-block" type="submit" ${on ? '' : 'disabled'}>
+            ${on ? `Add ${on === 1 ? 'this entry' : `these ${on}`}` : 'Nothing ticked'}
+          </button>
+          <button class="btn btn-text btn-block" type="button" data-action="bulk-restart">Start over</button>
+        </div>
+      </form>`;
+  }
+
+  // stage === 'ask'
+  return `
+    <form class="sheet-body" id="bulk-ask-form">
+      ${head}
+      <p class="sheet-note">Several at once. Say or type them in one line -
+        <em>200 auto, 150 lunch, 900 groceries</em>. Nothing is saved until you have looked at it.</p>
+      ${problem}
+
+      ${supported ? `
+        <div class="voice-stage">
+          <button type="button" class="voice-orb" data-action="voice-start"
+            aria-label="Start listening">${icon('microphone')}</button>
+          <p class="voice-status">Tap to speak</p>
+        </div>` : ''}
+
+      <label class="field">
+        <span class="field-label">${supported ? 'Or type the list' : 'Type the list'}</span>
+        <textarea class="input input-area" name="text" rows="3" autocomplete="off"
+          placeholder="200 auto, 150 lunch, 900 groceries">${esc(text || '')}</textarea>
+      </label>
+
+      <button class="btn btn-primary btn-block" type="submit">Read it</button>
+
+      ${supported ? `<p class="card-note">Speech is handled by your browser, which sends the
+        audio to its maker to turn into words. Typing sends nothing anywhere until the
+        list needs more than this phone can read on its own.</p>` : ''}
+    </form>`;
+}
+
 export function detailSheet(e, editing) {
   const cat = category(e.category);
   const income = e.direction === 'in';

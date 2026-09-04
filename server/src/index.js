@@ -18,7 +18,7 @@ import {
   attachAccount, requireAccount, requestCode, verifyCode, me, logout, logoutEverywhere, sweepExpired
 } from './auth.js';
 import { mailConfigured } from './mail.js';
-import { aiConfigured, categorise, reviewMonth, spendingTips } from './ai.js';
+import { aiConfigured, categorise, parseEntries, reviewMonth, spendingTips } from './ai.js';
 import { sync } from './sync.js';
 
 assertConfigured();
@@ -72,7 +72,12 @@ app.use((req, res, next) => {
   // ledger to another site.
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+  // microphone=(self) is the one that is opened, and only since voice bulk-add
+  // landed. Without it Chrome refuses SpeechRecognition outright - the same
+  // policy gates it as gates getUserMedia. (self) is this origin only: a frame
+  // from anywhere else still gets nothing, and frame-ancestors means there are
+  // no frames anyway.
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=(), usb=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
 
   // Only over TLS, and only when it is real TLS rather than a header a caller wrote:
@@ -392,6 +397,50 @@ app.post('/api/tips', requireAccount, async (req, res, next) => {
     };
 
     res.json({ tips: await spendingTips(facts) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/*
+ * A spoken list of expenses, read into records.
+ *
+ * The last of the three model routes and the only one where the model is asked what
+ * a NUMBER is - see the note above parseEntries() in ai.js for why that is allowed
+ * here and nowhere else. The short version: nothing it returns is saved. Every row
+ * arrives in a review sheet with an editable amount, and a person taps Add.
+ *
+ * The device tries first and only calls this when its own parser cannot read the
+ * text, so the easy majority - "200 auto, 150 lunch" - never reaches here at all.
+ *
+ * The TEXT is the whole payload. No ledger, no totals, no history. `today` comes
+ * from the device rather than from this server's clock, because "yesterday" means
+ * yesterday where the phone is, and this process runs in UTC.
+ */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+app.post('/api/parse-entries', requireAccount, async (req, res, next) => {
+  try {
+    // 600 characters is about a minute of talking. Longer than that is a paste, and
+    // a paste belongs in the import path rather than in a review sheet of 20 rows.
+    const text = String(req.body?.text || '').trim().slice(0, 600);
+    const categories = cleanIds(req.body?.categories);
+    const today = ISO_DATE.test(String(req.body?.today)) ? String(req.body.today) : null;
+
+    if (!text || categories.length < 2 || !today) {
+      res.status(400).json({ entries: null, reason: 'nothing to work with' });
+      return;
+    }
+    if (!aiConfigured()) {
+      res.json({ entries: null, reason: 'not configured' });
+      return;
+    }
+    if (!(await aiAllowed(req.account.id))) {
+      res.status(429).json({ entries: null, reason: 'too many requests' });
+      return;
+    }
+
+    res.json({ entries: await parseEntries(text, { today, categories }) });
   } catch (err) {
     next(err);
   }

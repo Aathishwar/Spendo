@@ -1,5 +1,5 @@
 /**
- * Spendo - the two calls that reach the model
+ * Spendo - the calls that reach the model
  *
  * Both go to our own server, never to NVIDIA directly: the key cannot be in a file
  * the browser downloads. Both need a session, and both fail to `null` rather than
@@ -15,14 +15,39 @@
  *   tips         figures only, over several months: monthly totals, and per category
  *                what was spent against what is usual. Same rule - no description,
  *                no date, no single transaction.
+ *   parseEntries the sentence someone spoke or typed, the category ids, and today's
+ *                date so "yesterday" can be resolved. Nothing from the ledger. It is
+ *                the only one of the four that carries words the user just said
+ *                rather than words they had already saved.
+ *
+ * All four are behind the single switch in Settings. `available()` is the one place
+ * that reads it, so turning it off means nothing is sent - not less, none.
  */
 
 import { isSignedIn } from './identity.js';
+import { aiOn } from './store.js';
+
+/**
+ * Whether a model call may be made right now.
+ *
+ * Three conditions, and the switch is first because it is the only one the person
+ * chose. Exported so a screen can ask the same question this file asks - a button
+ * offering to fetch suggestions that cannot be fetched is worse than no button.
+ */
+export function available() {
+  return aiOn() && isSignedIn() && navigator.onLine;
+}
 
 async function post(url, body, timeoutMs) {
-  // Signed out there is no session, so the request would 401. Not an error worth
-  // making, and not one worth showing.
-  if (!isSignedIn() || !navigator.onLine) return null;
+  /*
+   * One gate for every route.
+   *
+   * Deliberately here rather than at each call site: the Settings switch has to be
+   * a promise that nothing is sent, and a promise kept in four places is a promise
+   * that gets broken in the fifth. Signed out there is no session either, so the
+   * request would 401 - not an error worth making, and not one worth showing.
+   */
+  if (!available()) return null;
 
   const control = new AbortController();
   const timer = setTimeout(() => control.abort(), timeoutMs);
@@ -88,4 +113,34 @@ export async function suggestTips(facts) {
     .filter((t) => t.title && t.detail)
     .slice(0, 3);
   return clean.length ? clean : null;
+}
+
+/**
+ * A spoken list read into draft entries, or null.
+ *
+ * Only called when the device's own parser could not read the text - see js/bulk.js.
+ * Twenty-five seconds because this is the longest of the prompts and there is a
+ * progress state on screen counting it out; the sheet says what it is doing rather
+ * than sitting blank, so a slow answer is a slow answer and not a broken button.
+ *
+ * Shape-checked here as well as on the server, for the same reason the tips are:
+ * the review sheet renders whatever arrives, and a row with no amount in it is a
+ * field the person cannot fix and cannot dismiss.
+ */
+export async function parseEntries(text, today, categories) {
+  const out = await post('/api/parse-entries', { text, today, categories }, 25000);
+  if (!Array.isArray(out?.entries)) return null;
+
+  const allowed = new Set(categories);
+  return out.entries
+    .filter((r) => r && typeof r === 'object')
+    .map((r) => ({
+      amount: Number(r.amount),
+      description: String(r.description || '').trim(),
+      direction: r.direction === 'in' ? 'in' : 'out',
+      category: allowed.has(r.category) ? r.category : null,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(r.date)) ? String(r.date) : today
+    }))
+    .filter((r) => Number.isFinite(r.amount) && r.amount > 0 && r.description)
+    .slice(0, 20);
 }

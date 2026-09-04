@@ -18,6 +18,8 @@ import { categoriesFor, category, defaultCategory } from './categories.js';
 import * as account from './identity.js';
 import * as ai from './ai.js';
 import { guess, remember } from './categorise.js';
+import { parseSpoken } from './bulk.js';
+import { listen, speechSupported } from './voice.js';
 import { workbook } from './xlsx.js';
 
 const view = document.getElementById('view');
@@ -142,7 +144,8 @@ function render({ animate = false } = {}) {
     tips: tab === 'history' ? tipsState() : null,
     // Everything on the device, not the month being looked at. Settings is the one
     // screen that is not scoped to a month.
-    totalEntries: store.totalEntries()
+    totalEntries: store.totalEntries(),
+    ai: store.aiOn()
   };
   ctx.searchResult = runSearch(ctx.entries, search.query);
 
@@ -553,7 +556,7 @@ function paintMonth(facts, text, gaveUp = false) {
  * stamped with the figures they came from, so they survive a reload and are thrown
  * away the moment the figures move under them.
  */
-let tips = { busy: false, error: '' };
+let tips = { busy: false, error: '', elapsed: 0 };
 
 function tipsState() {
   const held = store.tipsHeld();
@@ -563,8 +566,40 @@ function tipsState() {
     madeAt: held ? held.madeAt : null,
     busy: tips.busy,
     error: tips.error,
-    possible: account.isSignedIn() && navigator.onLine
+    elapsed: tips.elapsed,
+    // One question, asked in one place. `ai.available()` is what the request itself
+    // checks, so a button can never be offered for a call that would be refused.
+    possible: ai.available(),
+    // Which of the three reasons it is, because "sign in" is useless advice to
+    // somebody who is signed in and has simply turned the feature off.
+    off: !store.aiOn()
   };
+}
+
+/*
+ * A wait that says the same thing for thirty seconds reads as a hang.
+ *
+ * The line is rewritten in place rather than by re-rendering: this card sits inside
+ * the History screen, and re-rendering a screen once a second to change three words
+ * would restart every entry animation on it.
+ */
+let tipsTicker = null;
+
+function stopTipsTicker() {
+  clearInterval(tipsTicker);
+  tipsTicker = null;
+}
+
+function startTipsTicker() {
+  stopTipsTicker();
+  const began = Date.now();
+  tipsTicker = setInterval(() => {
+    if (!tips.busy) return stopTipsTicker();
+    tips.elapsed = Date.now() - began;
+    const line = document.querySelector('.tips-card .voice-status [aria-live]');
+    if (line) line.textContent = ui.readingCopy(tips.elapsed, { what: 'your last few months', seconds: 30 });
+    return undefined;
+  }, 1000);
 }
 
 async function askForTips() {
@@ -579,7 +614,9 @@ async function askForTips() {
 
   tips.busy = true;
   tips.error = '';
+  tips.elapsed = 0;
   render();
+  startTipsTicker();
 
   // Labels, not ids: the model writes with them, and "Personal care" reads as itself
   // where "care" comes back in a sentence as a verb.
@@ -602,12 +639,362 @@ async function askForTips() {
   });
 
   tips.busy = false;
+  stopTipsTicker();
   if (!items) {
     tips.error = 'Could not get suggestions just now. Try again in a moment.';
   } else {
     store.setTips(items);
   }
   render();
+}
+
+/* ------------------------------------------------------- several at once */
+
+/*
+ * Adding five things one at a time is five sheets, five keyboards and five taps on
+ * Save, and the reason people stop logging expenses at all. This is one sentence
+ * instead - spoken or typed - read into drafts, checked once, saved together.
+ *
+ * The whole state of that flow, or null when the sheet is not open:
+ *
+ *   stage      'ask' | 'listening' | 'reading' | 'review'
+ *   text       what is being read - the transcript, or what was typed
+ *   heard      the live transcript while listening, revised word by word
+ *   rows       the drafts, each with its own checkbox and editable fields
+ *   editing    the one row whose category picker is open, or null
+ *   elapsed    how long the model has been thinking, so the copy can move
+ *   usedModel  whether this phone read it or the server did
+ *
+ * Nothing here is in the store, and that is the point: a draft is not an entry, and
+ * a flow abandoned halfway must leave nothing behind.
+ */
+let bulk = null;
+let bulkTicker = null;
+let listener = null;
+
+function paintBulk() {
+  if (!bulk) return;
+  sheetContent.innerHTML = ui.bulkSheet(bulk);
+  if (!sheet.open) sheet.showModal();
+}
+
+/*
+ * Read the fields back before any repaint that would replace them.
+ *
+ * The same rule as `captureDraft()` on the add sheet. Amount is kept as the STRING
+ * that is in the box rather than a number, so a half-typed "12." survives a repaint
+ * instead of being rounded into something the person did not type. It is turned
+ * into a number once, at save.
+ */
+function captureBulk() {
+  const form = document.getElementById('bulk-form');
+  if (!form || !bulk) return;
+  for (const row of bulk.rows) {
+    const description = form.elements[`desc-${row.key}`];
+    const amount = form.elements[`amt-${row.key}`];
+    if (description) row.description = description.value;
+    if (amount) row.amount = amount.value;
+  }
+}
+
+function captureAsk() {
+  const form = document.getElementById('bulk-ask-form');
+  if (form && bulk) bulk.text = form.elements.text.value;
+}
+
+function openBulk() {
+  bulk = {
+    stage: 'ask',
+    text: '',
+    heard: '',
+    rows: [],
+    editing: null,
+    error: '',
+    elapsed: 0,
+    supported: speechSupported(),
+    usedModel: false
+  };
+  paintBulk();
+}
+
+function stopBulkTicker() {
+  clearInterval(bulkTicker);
+  bulkTicker = null;
+}
+
+/*
+ * The progress line, rewritten in place once a second.
+ *
+ * In place rather than by repainting the sheet, for the same reason the tips line
+ * is: a repaint would restart the skeleton shimmer from its first frame every
+ * second, which reads as a stutter rather than as progress.
+ */
+function startBulkTicker() {
+  stopBulkTicker();
+  const began = Date.now();
+  bulkTicker = setInterval(() => {
+    if (!bulk || bulk.stage !== 'reading') return stopBulkTicker();
+    bulk.elapsed = Date.now() - began;
+    const line = sheetContent.querySelector('.voice-status [aria-live]');
+    if (line) line.textContent = ui.readingCopy(bulk.elapsed);
+    return undefined;
+  }, 1000);
+}
+
+/* ------------------------------------------------------------- the microphone */
+
+function startListening() {
+  captureAsk();
+  bulk.stage = 'listening';
+  bulk.heard = '';
+  bulk.error = '';
+  paintBulk();
+
+  listener = listen({
+    onText: (text) => {
+      if (!bulk || bulk.stage !== 'listening') return;
+      bulk.heard = text;
+      // Only the one node. Repainting on every revised word would rebuild the sheet
+      // several times a second while somebody is mid-sentence.
+      const slot = sheetContent.querySelector('.voice-heard');
+      if (slot) slot.textContent = text;
+    },
+    onEnd: (final) => {
+      listener = null;
+      finishListening(final);
+    },
+    onError: (message) => {
+      listener = null;
+      if (!bulk) return;
+      bulk.stage = 'ask';
+      bulk.error = message;
+      paintBulk();
+    }
+  });
+}
+
+function stopListening() {
+  const active = listener;
+  listener = null;
+  if (active) active.stop();
+}
+
+function finishListening(final) {
+  // The browser ends a session on its own after a few seconds of silence, whatever
+  // `continuous` says, so this can arrive when the sheet has already moved on.
+  if (!bulk || bulk.stage !== 'listening') return;
+
+  const text = String(final || bulk.heard || '').trim();
+  if (!text) {
+    bulk.stage = 'ask';
+    bulk.error = 'Nothing was heard. Try again, or type the list.';
+    paintBulk();
+    return;
+  }
+  bulk.text = text;
+  readText(text);
+}
+
+/* --------------------------------------------------------------- reading it */
+
+/**
+ * Turn a sentence into drafts, on this phone if it can and on the server if it cannot.
+ *
+ * The local parser gets first refusal and usually takes it: "200 auto, 150 lunch"
+ * is three lines of regex, offline, instant and free. The model is for the sentence
+ * that parser honestly cannot read - "two hundred rupees for an auto" - and it is
+ * asked only after the cheap layer has said so itself.
+ *
+ * With the model unavailable, whatever the local pass DID find is still shown. Two
+ * entries out of three is a better answer than an error, and the third is one the
+ * person can type.
+ */
+async function readText(text) {
+  const local = parseSpoken(text);
+
+  if (local.confident) {
+    showReview(local.entries, false);
+    return;
+  }
+
+  if (!ai.available()) {
+    if (local.entries.length) {
+      showReview(local.entries, false);
+      return;
+    }
+    bulk.stage = 'ask';
+    bulk.error = store.aiOn()
+      ? 'This phone could not read that on its own. Try it as a list - 200 auto, 150 lunch.'
+      : 'AI is off, so this is read on the phone only. Try it as a list - 200 auto, 150 lunch.';
+    paintBulk();
+    return;
+  }
+
+  bulk.stage = 'reading';
+  bulk.elapsed = 0;
+  bulk.error = '';
+  paintBulk();
+  startBulkTicker();
+
+  /*
+   * The EXPENSE list is what the model chooses from, even for a row it decides is
+   * income. Merging both lists would offer it two categories called the same thing
+   * in different directions; an income row's category is fixed up below instead,
+   * where the direction is already known.
+   */
+  const ids = categoriesFor('out').map((c) => c.id);
+  const rows = await ai.parseEntries(text, todayISO(), ids);
+
+  stopBulkTicker();
+  // The sheet may have been closed, or restarted, while that was in flight.
+  if (!bulk || bulk.stage !== 'reading') return;
+
+  if (!rows) {
+    bulk.stage = 'ask';
+    bulk.error = local.entries.length
+      ? 'Only part of that could be read. Check what came back.'
+      : 'Could not read that just now. Try again, or type it as a list.';
+    if (local.entries.length) showReview(local.entries, false);
+    else paintBulk();
+    return;
+  }
+
+  showReview(rows, true);
+}
+
+/*
+ * The category for one draft, from whichever layer can answer.
+ *
+ * `guessed` is carried alongside it and is the reason this is not just a fallback
+ * chain: a row that only got a DEFAULT is a row worth spending a model call on
+ * afterwards, and a row that got a real answer must not have it overwritten by one
+ * that arrives later.
+ */
+function pickCategory(draftRow) {
+  const allowed = categoriesFor(draftRow.direction);
+  if (draftRow.category && allowed.some((c) => c.id === draftRow.category)) {
+    return { category: draftRow.category, guessed: true };
+  }
+  const local = guess(draftRow.description, draftRow.direction);
+  if (local) return { category: local.category, guessed: true };
+  return { category: defaultCategory(draftRow.direction), guessed: false };
+}
+
+function showReview(entries, usedModel) {
+  stopBulkTicker();
+  if (!bulk) return;
+
+  if (!entries || !entries.length) {
+    bulk.stage = 'ask';
+    bulk.error = 'No expenses in that. Try "200 auto, 150 lunch".';
+    paintBulk();
+    return;
+  }
+
+  bulk.rows = entries.map((e, i) => {
+    const picked = pickCategory(e);
+    return {
+      key: `r${i}`,
+      on: true,
+      amount: e.amount,
+      description: e.description,
+      direction: e.direction,
+      date: e.date || todayISO(),
+      category: picked.category,
+      guessed: picked.guessed
+    };
+  });
+  bulk.stage = 'review';
+  bulk.usedModel = usedModel;
+  bulk.editing = null;
+  bulk.error = '';
+  paintBulk();
+  fillCategories();
+}
+
+/**
+ * Ask the model about the rows that fell through to a default category.
+ *
+ * Only those, and only five of them: the rest already have an answer from the
+ * person's own history or from the word list, and re-asking about those would spend
+ * quota to confirm something already known.
+ *
+ * The chip is rewritten in place, never by repainting. Somebody is reading this
+ * sheet and quite possibly typing in it while these land, and replacing the form
+ * under them would drop the caret out of a half-corrected amount - the same trap the
+ * add sheet's own guess avoids.
+ */
+async function fillCategories() {
+  if (!ai.available() || !bulk) return;
+
+  const open = bulk;
+  const wanted = open.rows.filter((r) => !r.guessed).slice(0, 5);
+  if (!wanted.length) return;
+
+  await Promise.all(wanted.map(async (row) => {
+    const ids = categoriesFor(row.direction).map((c) => c.id);
+    const found = await ai.suggestCategory(row.description, ids);
+    // A late answer is dropped, exactly as it is on the add sheet: the sheet may be
+    // gone, restarted, or the row may have been given a category by hand since.
+    if (!found || bulk !== open || bulk.stage !== 'review' || row.guessed) return;
+
+    row.category = found;
+    row.guessed = true;
+    remember(row.description, found);
+
+    const chip = sheetContent.querySelector(`[data-action="bulk-category"][data-row="${row.key}"]`);
+    if (!chip) return;
+    const cat = category(found);
+    chip.innerHTML = ui.icon(cat.icon);
+    chip.append(` ${cat.label}`);
+  }));
+}
+
+/* ----------------------------------------------------------------- saving */
+
+function saveBulk() {
+  captureBulk();
+  const wanted = bulk.rows.filter((r) => r.on);
+
+  if (!wanted.length) return;
+
+  /*
+   * Checked here rather than per field, because the failure is a row and not a
+   * character. `Number` on the whole string, never a salvage - the same rule the
+   * single amount field follows, and for the same reason: "89e" must be refused,
+   * not quietly saved as 89.
+   */
+  const bad = wanted.find((r) => !(Number(String(r.amount).trim()) > 0) || !String(r.description).trim());
+  if (bad) {
+    bulk.error = 'Every ticked row needs an amount above zero and something it was for.';
+    paintBulk();
+    return;
+  }
+
+  const saved = wanted.map((r) => store.addEntry({
+    amount: Number(String(r.amount).trim()),
+    description: String(r.description).trim(),
+    date: r.date,
+    direction: r.direction,
+    category: r.category
+  }));
+
+  // What was corrected by hand is worth more than what was guessed: it is the
+  // person's own answer, and layer 1 of the category guess reads it next time.
+  for (const r of wanted) remember(String(r.description).trim(), r.category);
+
+  bulk = null;
+  closeSheet();
+  // Land on the month the entries went into. They are almost always today's, but a
+  // "yesterday" on the 1st puts them in the previous one, and saving into a month
+  // the screen is not showing looks exactly like saving nothing.
+  ym = saved[saved.length - 1].ym;
+  render();
+
+  showSnack(`Added ${plural(saved.length, 'entry', 'entries')}`, 'Undo', () => {
+    for (const e of saved) store.removeEntry(e.id);
+    render();
+  });
 }
 
 /* ----------------------------------------------------------------- sign in */
@@ -1684,7 +2071,7 @@ document.addEventListener('click', (e) => {
     '[data-direction]', '[data-category]', 'button[data-theme]',
     '[data-slice]', '[data-edit-field]', '[data-set-category]',
     '[data-set-direction]', '[data-pick-day]', '[data-set-day]', '[data-cal-step]',
-    '[data-suggest-value]', '[data-open-month]'
+    '[data-suggest-value]', '[data-open-month]', 'button[data-ai]'
   ].join(', '));
   if (!el) return;
 
@@ -1745,6 +2132,14 @@ document.addEventListener('click', (e) => {
   if (el.dataset.theme) {
     store.setSetting('theme', el.dataset.theme);
     applyTheme(el.dataset.theme);
+    render();
+    return;
+  }
+
+  // The one switch behind every model-backed feature. `js/ai.js` reads it before
+  // each request, so this writes the setting and nothing else has to be told.
+  if (el.dataset.ai) {
+    store.setSetting('ai', el.dataset.ai === 'on');
     render();
     return;
   }
@@ -1846,6 +2241,69 @@ document.addEventListener('click', (e) => {
       else deleteEntry(el.dataset.entry);
       break;
     }
+    case 'open-bulk':
+      /*
+       * The half-typed add sheet is read back before it is replaced.
+       *
+       * Closing the bulk sheet closes the dialog rather than stepping back to the
+       * add sheet - it is one way in, not a stack - but `draft` survives in memory,
+       * so the next tap on Add reopens what was typed instead of an empty form.
+       */
+      if (document.getElementById('add-form')) captureDraft();
+      openBulk();
+      break;
+    case 'voice-start': startListening(); break;
+    case 'voice-stop': stopListening(); break;
+    case 'bulk-restart':
+      bulk.stage = 'ask';
+      bulk.rows = [];
+      bulk.error = '';
+      bulk.editing = null;
+      paintBulk();
+      break;
+    case 'bulk-toggle': {
+      const row = bulk.rows.find((r) => r.key === el.dataset.row);
+      if (!row) break;
+      captureBulk();
+      row.on = !row.on;
+      paintBulk();
+      break;
+    }
+    case 'bulk-direction': {
+      const row = bulk.rows.find((r) => r.key === el.dataset.row);
+      if (!row) break;
+      captureBulk();
+      row.direction = row.direction === 'in' ? 'out' : 'in';
+      // An expense category means nothing on an income row, so the category moves
+      // with the direction rather than staying behind mislabelled. Same rule as the
+      // detail sheet.
+      if (!categoriesFor(row.direction).some((c) => c.id === row.category)) {
+        row.category = defaultCategory(row.direction);
+        row.guessed = false;
+      }
+      paintBulk();
+      break;
+    }
+    case 'bulk-category': {
+      captureBulk();
+      // One picker open at a time: thirteen chips per row, times five rows, is a
+      // sheet nobody can read.
+      bulk.editing = bulk.editing === el.dataset.row ? null : el.dataset.row;
+      paintBulk();
+      break;
+    }
+    case 'bulk-set-category': {
+      const row = bulk.rows.find((r) => r.key === el.dataset.row);
+      if (!row) break;
+      captureBulk();
+      row.category = el.dataset.cat;
+      // Chosen by hand, so no late answer from the model may move it.
+      row.guessed = true;
+      bulk.editing = null;
+      paintBulk();
+      break;
+    }
+
     case 'get-tips': askForTips(); break;
     case 'export-json': exportBackup(); break;
     case 'sync-now': sync.syncNow('manual'); break;
@@ -1912,7 +2370,10 @@ document.addEventListener('input', (e) => {
     return;
   }
 
-  if (el.name === 'amount') filterAmountInput(el);
+  // By class, not by name. The review sheet has one amount field per row, each
+  // named for its row, and a check on the name alone let junk through in every
+  // one of them.
+  if (el.classList.contains('input-amount')) filterAmountInput(el);
 
   if (el.name === 'description' && el.form) {
     filterSuggestions(el.form);
@@ -1986,6 +2447,22 @@ document.addEventListener('submit', (e) => {
     return;
   }
 
+  if (form.id === 'bulk-ask-form') {
+    const text = form.elements.text.value.trim();
+    if (!text) {
+      form.elements.text.focus();
+      return;
+    }
+    bulk.text = text;
+    readText(text);
+    return;
+  }
+
+  if (form.id === 'bulk-form') {
+    saveBulk();
+    return;
+  }
+
   if (form.id === 'edit-form') {
     const field = form.dataset.field;
     if (field === 'amount') {
@@ -2047,6 +2524,17 @@ sheet.addEventListener('close', () => {
   sheetContent.innerHTML = '';
   signin = null;
   reviewYM = null;
+  /*
+   * Dropped BEFORE the recogniser is stopped, not after.
+   *
+   * stop() delivers a final transcript through the same path a natural end does, and
+   * that path reads the flow onwards into the review sheet. Clearing the state first
+   * is what makes the late callback a no-op instead of reopening a sheet the person
+   * has just closed.
+   */
+  bulk = null;
+  stopBulkTicker();
+  stopListening();
   if (introStep !== null) {
     introStep = null;
     if (!store.settings().seenIntro) {

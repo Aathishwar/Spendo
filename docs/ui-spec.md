@@ -609,6 +609,69 @@ as the element goes from `display: none` to shown can be created and never commi
 frame, leaving it at its first keyframe for good. Position and visibility are not negotiable
 for a component whose job is to report what just happened.
 
+### Several at once
+
+Reached from a **Several** button at the far end of the add sheet's title bar
+(`margin-left: auto`, never a spacer). One sheet, four states - the person is doing one
+thing, and a flow that closed and reopened between speaking and reviewing loses the
+thread.
+
+| State | What is on screen |
+|---|---|
+| ask | an 88px mic orb, a 3-row textarea, and one line saying where the audio goes |
+| listening | the orb in `--spend` with a pulsing halo, the transcript in a `min-height` box |
+| reading | a dot-pulse and a line of copy, the sentence quoted, three skeleton rows |
+| review | one row per draft, then Add / Start over |
+
+**The mic orb is 88px** because it is pressed while talking rather than while looking,
+and because starting is the only action on that screen. Everything else there is
+deliberately smaller than it.
+
+**The transcript box has a `min-height`, not a height.** Speech recognition revises what
+it heard, so the text shortens as often as it lengthens, and a box that tracked it
+exactly would jump on every revision.
+
+**A review row is checkbox + [amount][description] + [category][direction][date].** The
+amount leads, which is the reverse of every other row in this app - and it is deliberate.
+Everywhere else the description leads and the figure is read off the right edge; here the
+amount is the field most likely to be WRONG, because it came out of a microphone, so
+putting it under the thumb first is putting the correction first.
+
+Chips inside a row take `.chip-raised` (`--surface`). The default chip background IS
+`--surface-sunken`, which is exactly what the row is made of, so on this one screen the
+category and direction chips came out looking like plain text with an icon beside them.
+Everything changeable in a row now shares one surface.
+
+**An unticked row is dimmed to 0.55, never hidden and never struck through.** The reason
+somebody unticks a row is usually that the amount is wrong, and the next thing they may
+do is fix it and tick it again. A row that disappeared would make that a re-dictation.
+
+### Waiting
+
+Any wait that can exceed four seconds changes its wording, in three stages:
+
+| after | says |
+|---|---|
+| 0s | "Reading that" / "Reading your last few months" |
+| 4s | "Still reading - that is a long one" |
+| 12s | "Taking longer than usual. It gives up at 25 seconds" (30 for suggestions) |
+
+Each stage tells the reader something they did not know a moment ago. A line that never
+changes reads as a hang at about four seconds, whatever it says.
+
+Only the FIRST line names what is being read, and only the last names the deadline. Each
+stage is a whole sentence, not a prefix with a subject stuck on the end - written the
+other way it produced "Still reading - that is a long one your last few months".
+
+The stage line is rewritten by setting `textContent` on ONE node, never by re-rendering
+the screen or the sheet. Re-rendering restarts every animation inside it once a second,
+which reads as a stutter rather than as progress.
+
+Every looping animation in these states - the mic halo, the dot pulse, the skeleton sweep
+- is off under `prefers-reduced-motion`. The copy beside them already says what they say,
+and a loop that runs for the length of a wait is exactly what a vestibular trigger looks
+like.
+
 ---
 
 ## States
@@ -616,8 +679,14 @@ for a component whose job is to report what just happened.
 Every list and every fetch ships four states. The success state alone is not a finished
 component.
 
-- **Loading** - skeleton blocks shaped like the real rows, `--surface-sunken`, a slow opacity
-  pulse. Never a centred spinner.
+- **Loading** - skeleton blocks shaped like the real rows, on `--surface` (the RAISED
+  colour, matching the inputs they stand in for), with a gradient sweeping across them.
+  Never a centred spinner.
+
+  Two rules learnt building the bulk review sheet. The bars must be legible **standing
+  still**: built on `--surface-sunken` they were the same shade as the row behind them,
+  so between sweeps there were three blank rounded blocks with no shape in them. And a
+  wait over four seconds must **change its wording** - see Waiting below.
 - **Empty** - one line of plain text saying what to do next, plus the action that does it.
   "No expenses in August yet." with the Add expense button underneath.
 - **Error** - inline, in place, with the reason and a retry. Toasts only for things that

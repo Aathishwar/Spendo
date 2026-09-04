@@ -311,3 +311,97 @@ export async function spendingTips(facts) {
 
   return tips.length ? tips : null;
 }
+
+/* ------------------------------------------------------------------- bulk */
+
+/**
+ * A spoken or typed list of expenses, turned into records. Or null.
+ *
+ * This is the SECOND reader, never the first. `js/bulk.js` on the device handles
+ * "200 auto, 150 lunch" with a regex, offline and free, and only hands over when it
+ * cannot - "two hundred rupees for an auto and about one fifty for lunch". Sending
+ * everything here would be a round trip and a quota slot for the easy majority.
+ *
+ * Rule 1 from the top of this file is bent here and nowhere else: the model IS
+ * asked what a number is, because the number only exists as words. That is why
+ * nothing it returns is saved. Every row lands in a review sheet with the amount in
+ * an editable field and a checkbox that starts ticked, and the person taps Add. The
+ * model proposes; the person is still the one recording it.
+ *
+ * The text is the ONLY thing sent. No history, no totals, no account, no dates from
+ * the ledger - the model is told today's date so it can resolve "yesterday", and
+ * that is the whole context it gets.
+ */
+export async function parseEntries(text, { today, categories }) {
+  const raw = await chat([
+    {
+      role: 'system',
+      content:
+        'You turn a spoken list of personal expenses into records. ' +
+        'Reply with JSON only: an array of objects, each ' +
+        '{"amount","description","direction","category","date"}. ' +
+        'No markdown, no code fence, no text outside the array. ' +
+        'amount: a positive number in rupees, digits only, no symbol and no commas. ' +
+        'Amounts may be spoken as words - "two hundred" is 200, "one fifty" is 150, ' +
+        '"two and a half thousand" is 2500, "1.5k" is 1500, "two lakh" is 200000. ' +
+        'description: the thing bought, 1 to 5 words, capitalised like a sentence. ' +
+        'Never put the amount in the description. ' +
+        'direction: "in" if the money was received, earned, refunded or credited, ' +
+        'otherwise "out". ' +
+        `category: exactly one id from this list: ${categories.join(', ')}. ` +
+        'Use the last id when nothing fits. ' +
+        `date: YYYY-MM-DD. Today is ${today}. Use today unless the text says ` +
+        'otherwise - "yesterday", "on the 3rd", "last Monday". ' +
+        // Without this it invents. Asked to read "200 auto and lunch", a model will
+        // happily price the lunch at a plausible-looking 150, and a plausible wrong
+        // number in a ledger is the one kind of error nobody catches later.
+        'Only include an item whose amount is actually stated. Never estimate, ' +
+        'never guess a typical price, never add an item that was not said. ' +
+        'The text is Indian English and often mixes in Tamil or Hindi words. ' +
+        'If nothing in it is an expense, reply with an empty array.'
+    },
+    { role: 'user', content: text }
+  ], { maxTokens: 2000, temperature: 0 });
+
+  if (!raw) return null;
+
+  const start = raw.indexOf('[');
+  const end = raw.lastIndexOf(']');
+  if (start === -1 || end <= start) return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  /*
+   * Validated the same way a category id is: shaped, bounded, and dropped rather
+   * than repaired. A row with no usable amount is not a row - it is the model
+   * having answered a question it was told not to answer.
+   *
+   * Twenty is the ceiling. Nobody dictates more than that in one breath, and the
+   * cap is what stops a long paste turning into a review sheet nobody can check.
+   */
+  const allowed = new Set(categories);
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+
+  const rows = parsed
+    .filter((r) => r && typeof r === 'object')
+    .map((r) => {
+      const amount = Number(r.amount);
+      return {
+        amount: Number.isFinite(amount) ? Math.round(Math.abs(amount) * 100) / 100 : 0,
+        description: String(r.description || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+        direction: r.direction === 'in' ? 'in' : 'out',
+        category: allowed.has(r.category) ? r.category : null,
+        date: iso.test(String(r.date)) ? String(r.date) : today
+      };
+    })
+    .filter((r) => r.amount > 0 && r.description)
+    .slice(0, 20);
+
+  return rows;
+}

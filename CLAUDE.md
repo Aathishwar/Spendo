@@ -182,8 +182,9 @@ Next: phase 2, the server and sync.
 ### Known gaps
 
 
-- **No tests.** Phase 1 was verified by driving a browser, which is fine for one pass and is
-  not a regression net.
+- **Tests cover the server and the pure client modules, not the screens.** 42 of them:
+  sync, sessions, quotas, the bulk parser and the model-reply validator. Everything with
+  a DOM in it is still verified by driving a browser.
 - **Search is complete.** Keywords, the amount operators (`>500`, `<200`, `100-500`, an
   exact number) and the date operators (`d:21`, `21-06-2025`, a range, `m:2025-05`,
   `today`, `yesterday`) all work and combine.
@@ -251,6 +252,8 @@ spendo/
     sync.js             phase 2: background push and pull
     push.js             phase 4: web push subscription
     xlsx.js             .xlsx export: a ZIP and some XML, written by hand
+    bulk.js             several expenses out of one sentence, with no model
+    voice.js            the microphone, wrapped thinly. Returns words, parses nothing
     boot-theme.js       blocking, sets the theme before the first paint
   sw.js                 service worker, offline shell
   manifest.webmanifest
@@ -611,12 +614,15 @@ inferrable from four letters, so it is an explicit override.
 | `/api/categorise` | the description text, the list of category ids | amount, date, history, anything else |
 | `/api/review` | totals, category shares and labels, last month's total | any description, any date, any individual transaction |
 | `/api/tips` | monthly totals over the window, and per category what was spent against what that category usually costs | any description, any date, any individual transaction |
+| `/api/parse-entries` | the sentence that was spoken or typed, the category ids, and the device's own idea of today so "yesterday" resolves where the phone is | anything from the ledger - no totals, no history, no account |
 
-The `/api/review` and `/api/tips` bodies are rebuilt field by field on the server
-rather than passed through, so whatever else a caller puts in it does not reach the
-model. All three routes require a session and are capped per account per hour: a
-signed-in session is a credential someone could script, and without the cap one
-account can empty the quota for the app.
+The `/api/review`, `/api/tips` and `/api/parse-entries` bodies are rebuilt field by
+field on the server rather than passed through, so whatever else a caller puts in it
+does not reach the model. All four routes require a session and are capped per account
+per hour: a signed-in session is a credential someone could script, and without the cap
+one account can empty the quota for the app. All four are also behind the single switch
+in Settings, read in one place - `available()` in js/ai.js - so off means nothing is
+sent rather than less.
 
 **Suggestions are asked for, never pushed.** `/api/tips` is behind a button on
 History, because advice nobody asked for is nagging, and because a call made on every
@@ -847,6 +853,141 @@ phrased as though the app had looked. It now says "September 2026 has no 31st." 
 date term is also said back in words under the field, so a year typed wrong is visible
 instead of looking like a quiet month.
 
+## Several at once, and one switch over all of it
+
+Adding five things one at a time is five sheets, five keyboards and five taps on Save.
+That is the reason people stop logging expenses, so it is now one sentence - spoken or
+typed - read into drafts, checked once, and saved together. The way in is a **Several**
+button in the add sheet's own title bar, because the add sheet is the one everybody
+already opens.
+
+**Three readers, and the cheap one goes first.** The same shape as the category guess:
+
+```
+1  js/bulk.js         a regex over the sentence     0ms, offline, free
+2  /api/parse-entries the model, only when 1 says it cannot   2-15s, online
+3  /api/categorise    per row, only for rows that got a default category
+```
+
+Layer 1 reads what a spoken list actually looks like - "200 auto, 150 lunch, 900
+groceries" - because a person listing what they spent says the number and then the
+thing. Measured against thirteen cases it reads the list forms, the `2k`/`1.5k`/`2 lakh`
+shorthands, "got 5000 salary" as income and "450 groceries yesterday" onto yesterday's
+date, all with no network.
+
+**`confident` is the whole design, and it is one flag on purpose.** The parser returns
+what it found AND what it could not read, and decides for itself whether that is good
+enough - nothing found, or a leftover segment with real words in it, means hand over.
+Getting an ENTRY wrong is recoverable, because the review sheet shows it and the person
+fixes it. Claiming confidence about a sentence it cannot read is what stops the model
+ever being asked, and that failure is silent. So `" and "` is left in the splitter even
+though it breaks "fish and chips": the damage is a leftover segment, which is exactly
+the signal that escalates.
+
+**This is the one place the model is asked what a number is.** Everywhere else it is
+handed figures the device computed and asked only to phrase them - the rule at the top
+of `server/src/ai.js`. Here the figure exists only as words somebody said, so the rule
+is bent, and it is bought back at the other end: nothing the model returns is saved.
+Every row lands in a review sheet with an editable amount, a checkbox that starts
+ticked, and a person who taps Add. The model proposes; the person still records it.
+
+The checkbox starting TICKED is the argument for the whole feature. The default is
+"these look right", the work is unticking the one that is not, and a row that started
+unticked would make somebody confirm four correct things in order to fix a fifth.
+
+**The validator is the safety rail, and it has its own suite.** `server/test/parse.test.js`
+stands up a real chat endpoint on localhost rather than stubbing fetch, because what is
+being tested is what survives the round trip - the `<think>` strip, the code fence, the
+array cut out of surrounding prose. A row with no usable amount is DROPPED, never
+repaired: told "200 auto and lunch" a model will happily price the lunch at a plausible
+150, and a plausible wrong number in a ledger is the error nobody catches later.
+
+**The category chip is patched in place, never by repainting.** Layer 3 lands while
+somebody is reading the sheet and quite possibly typing in it, and replacing the form
+under them would drop the caret out of a half-corrected amount - the same trap the add
+sheet's own guess avoids. `guessed` on each row is what makes a late answer safe: a row
+that already has a real category, or one chosen by hand, is never overwritten by one
+that arrives afterwards.
+
+### The microphone, and the one thing that does leave the origin
+
+Speech recognition in a browser is **not local**. Chrome streams the audio to Google and
+hands back text. It is the only place in this app where something about the user leaves
+our origin, our CSP cannot see it, and our CSP could not stop it - the browser makes that
+request, not the page.
+
+So it is behind an explicit tap, never listening on its own, the sheet says where the
+audio goes in plain words, and the same sheet has a text box that does the identical job
+with nothing leaving the device. Someone who does not want that trade has a complete
+route without it - which is also why the text box is not a fallback for browsers without
+speech, but a first-class way in.
+
+`Permissions-Policy` had `microphone=()`, which refuses `SpeechRecognition` outright -
+the same policy gates it as gates `getUserMedia`. It is `microphone=(self)` now: this
+origin only, and `frame-ancestors 'none'` means there are no frames to inherit it.
+
+Three speech failures are named separately because they are three different things for
+the person to do: a blocked microphone is a permission to change, an unreachable speech
+service is a reason to type it, and anything else is a retry. `aborted` and `no-speech`
+are not failures at all - they are what stopping produces, and what tapping and then
+saying nothing produces.
+
+**Clear the state before stopping the recogniser, not after.** `stop()` delivers its
+final transcript through the same callback a natural end uses, and that callback carries
+the flow onwards into the review sheet. Dropping `bulk` first is what makes a close
+mid-sentence a no-op instead of reopening a sheet the person just shut.
+
+### A wait that says nothing reads as a hang
+
+A model call here runs 2 to 15 seconds and sometimes longer. A progress line that never
+changes reads as frozen at about four, so the copy moves twice - at 4s and at 12s - and
+each move tells the reader something new: that it is still going, and then that this is
+longer than usual and roughly when it will give up. The same three-stage line is now on
+the spending suggestions, which is the longest wait in the app at up to thirty seconds
+and used to show one unchanging sentence for all of it.
+
+Both tick by rewriting ONE node's text, never by re-rendering. Repainting the sheet once
+a second restarts the skeleton shimmer from its first frame every second, which reads as
+a stutter rather than as progress; repainting History once a second restarts every entry
+animation on it.
+
+**A skeleton has to be legible standing still.** The bars were first built on the sunken
+surface, which is what the row itself is made of, so between sweeps they were three blank
+rounded blocks with no shape in them. They take the raised surface now: the sweep says it
+is working, the shapes say what is coming, and only one of those is animated. All three
+loops - the halo, the dots, the sweep - stop under `prefers-reduced-motion`, because the
+copy beside them already says everything they say.
+
+### The switch
+
+One row in Settings, on by default, and `js/ai.js` reads it before every request. It is
+gated in `post()` rather than at the four call sites: the switch has to be a promise that
+nothing is sent, and a promise kept in four places is a promise that gets broken in the
+fifth. `available()` is exported so a screen asks the same question the request asks - a
+button offering suggestions that cannot be fetched is worse than no button.
+
+Absent means ON. It was added after people already had a settings object, and treating a
+missing key as OFF would have silently turned the feature off for everyone who had ever
+opened the app.
+
+Off is a real state, not a broken one: categories still come from your own history and
+the keyword table, bulk entry still reads a plain list, and the write-up and suggestions
+stop being offered rather than failing. The tips card says which of the three reasons it
+is, because "sign in" is useless advice to somebody who is signed in and has simply
+turned it off.
+
+### Two things found while building it
+
+- **`if (el.name === 'amount')` was the wrong hook for the amount filter.** The review
+  sheet has one amount field per row, each named for its row, so the junk filter that
+  stops `8979erte` becoming 8979 applied to none of them. It keys on the `input-amount`
+  class now, which is what actually identifies the field.
+- **`tools/build-preview.py` was building a dead page.** Its module list was missing
+  `identity`, `store`'s dependents `categorise`, `ai` and `sync`, so app.js's imports of
+  those were rewritten to `const x = __m_x;` against an identifier nothing defined - a
+  ReferenceError on the first line of the bundle, and a blank page rather than a degraded
+  one. The list has to be COMPLETE, not merely ordered.
+
 ## Installing
 
 **`manifest.webmanifest` declares `"id": "spendo"`, and that string must never change.**
@@ -924,7 +1065,11 @@ disappears against the app's own light ground.
 ## Conventions
 
 - No build step. If a change needs a bundler, it is the wrong change.
-- No runtime request leaves our origin. Fonts, icons and everything else are served locally.
+- No runtime request leaves our origin. Fonts, icons and everything else are served
+  locally. The ONE exception is browser speech recognition, which streams audio to the
+  browser maker rather than to us - it is behind an explicit tap, it is said out loud in
+  the sheet, and typing does the same job without it. Nothing the PAGE requests has ever
+  left this origin and nothing new may.
 - Every write is local first and returns immediately. Sync is background, and is skipped
   entirely when there is nothing to sync to.
 - Money is stored in rupees as `numeric(12,2)`. Never a float.

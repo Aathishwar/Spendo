@@ -13,7 +13,7 @@
  * network-only: a cached sync response would hand the phone stale balances.
  */
 
-const CACHE = 'spendo-v46';
+const CACHE = 'spendo-v47';
 
 const SHELL = [
   './',
@@ -31,6 +31,8 @@ const SHELL = [
   'js/identity.js',
   'js/ai.js',
   'js/categorise.js',
+  'js/bulk.js',
+  'js/voice.js',
   'js/xlsx.js',
   // The tab icon and the one iOS uses. The 512 and the maskable are read by the OS
   // at install time and never by the running app, so they are left to the network

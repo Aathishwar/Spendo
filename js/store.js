@@ -22,7 +22,11 @@ const EMPTY = {
   version: 1,
   entries: [],          // { id, date, ym, amount, direction, description, category, createdAt, updatedAt, deletedAt, dirty }
   months: {},           // ym -> { opening, closedAt, updatedAt, dirty }
-  settings: { theme: 'system', seenIntro: false },
+  // `ai` is the single switch for every model-backed feature. Absent means ON:
+  // it was added after people already had a settings object, and treating a
+  // missing key as OFF would have silently turned the feature off for everyone
+  // who had ever opened the app.
+  settings: { theme: 'system', seenIntro: false, ai: true },
   // What the sync engine remembers between runs. `cursor` is the server's change
   // sequence, not a timestamp; see server/src/schema.sql for why.
   sync: { cursor: 0, lastSyncedAt: null },
@@ -449,6 +453,17 @@ export function settings() {
 export function setSetting(key, value) {
   state.settings[key] = value;
   commit();
+}
+
+/**
+ * Whether the model-backed features may run at all.
+ *
+ * One function, read by js/ai.js before every request and by the screens that offer
+ * those features, so the switch cannot be honoured in one place and forgotten in
+ * another. `!== false` rather than a truthiness check, for the reason above.
+ */
+export function aiOn() {
+  return state.settings.ai !== false;
 }
 
 /* -------------------------------------------------------------------- sync */

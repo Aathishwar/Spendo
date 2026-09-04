@@ -27,7 +27,14 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Dependency order. A module may only import from ones above it.
-MODULES = ['format', 'categories', 'charts', 'xlsx', 'store', 'ui']
+# Dependency order, and it must be COMPLETE: a module app.js imports that is not
+# listed here is rewritten to `const x = __m_x;` against an identifier nothing
+# defines, which is a ReferenceError on the first line of the bundle - a blank
+# page, not a degraded one. identity, sync, ai and categorise were all missing.
+MODULES = [
+    'format', 'categories', 'charts', 'xlsx', 'voice',
+    'identity', 'store', 'bulk', 'categorise', 'ai', 'sync', 'ui',
+]
 ENTRY = 'app'
 
 IMPORT_RE = re.compile(

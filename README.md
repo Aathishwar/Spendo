@@ -14,6 +14,11 @@ computes the balance instead of storing it.
   own history and a keyword table before anything leaves the phone; Groq is
   asked only about descriptions neither could place, and its answer is cached so the
   same one is never sent twice.
+- **Several at once.** Say or type "200 auto, 150 lunch, 900 groceries" and check them
+  in one sheet before any of it is saved. A regex on the phone reads a plain list for
+  free; the model is asked only when that honestly cannot - "two hundred rupees for an
+  auto". One switch in Settings turns every model-backed feature off, and off means
+  nothing is sent.
 - **Balance is computed, never stored.** Opening money plus a running sum over entries
   ordered by date. Backdate an expense and every figure downstream is right on the next
   read, because there is no stored figure to be wrong.
@@ -48,7 +53,9 @@ of emailed, which is enough to test signing in end to end. That fallback is refu
 
 ```
 cd server
-npm test                         # the real SQL against an in-memory Postgres
+npm test                         # 42 tests: the real SQL against an in-memory Postgres,
+                                 # the bulk parser, and what the model is allowed to
+                                 # hand back
 node test/fake-server.js         # a stand-in server, for driving the client with no database
 ```
 
@@ -64,7 +71,7 @@ service's **Environment** tab - they are marked `sync: false` and are never in t
 | `DATABASE_URL` | Neon, the **pooled** connection string |
 | `BREVO_API_KEY` | sends the sign-in code |
 | `MAIL_FROM_EMAIL` | a sender **verified** on that Brevo account |
-| `GROQ_API_KEY` | Groq, for the category guess and month write-ups. Optional - both fall back cleanly without it |
+| `GROQ_API_KEY` | Groq, for the category guess, month write-ups, spending suggestions and reading a spoken list. Optional - every one of them falls back cleanly without it |
 | `AUTH_SECRET` | Keys the sign-in codes stored in the database. Any long random string. Without it they are a plain SHA-256, and a six-digit code hashed that way is recoverable in seconds by anyone who reads the table |
 | `NODE_ENV` | `production`. Set in `render.yaml`; it is what makes the server refuse to issue a sign-in code when mail is not configured |
 
