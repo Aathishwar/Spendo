@@ -124,14 +124,37 @@ function readSegment(raw, fallbackDate) {
 
   const direction = INCOME.test(text) ? 'in' : 'out';
 
+  /*
+   * Capped at the same 80 the server caps at.
+   *
+   * A segment with one amount in it and forty words after it is not a description,
+   * it is a transcript that went wrong - which is exactly what a duplicated speech
+   * result produced. Cutting it keeps the review row readable and keeps the two ends
+   * of this feature agreeing about what a description is.
+   */
   const description = sentence(
     clean(rest)
       .split(' ')
       .filter((w) => w && !NOISE.has(w.toLowerCase()))
       .join(' ')
+      .slice(0, 80)
+      .trim()
   );
 
-  return { amount, description, direction, date, ym: ymOf(date) };
+  /*
+   * A second number left over means this segment is probably two entries.
+   *
+   * Dictation drops the joining word more often than it drops the comma, so "200
+   * petrol and 500 milk" arrives as "200 petrol 500 milk" - one segment, and this
+   * parser reads it as two hundred rupees of "Petrol 500 milk". One entry with the
+   * wrong description and half the money missing, reported confidently.
+   *
+   * It is NOT split here. Splitting at every number breaks "iPhone 15 case 2000" and
+   * "Room 2 rent 5000" into nonsense, and a wrong entry is worse than a slow one.
+   * The segment is flagged instead, which sends the whole sentence to the model -
+   * which is what the model is for.
+   */
+  return { amount, description, direction, date, ym: ymOf(date), doubtful: /\d/.test(rest) };
 }
 
 /**
@@ -139,14 +162,17 @@ function readSegment(raw, fallbackDate) {
  *
  * Returns the entries it found AND the segments it could not read, because the
  * second list is the decision the caller has to make. `confident` is the same
- * decision expressed once, so no two callers can disagree about it:
+ * decision expressed once, so no two callers can disagree about it. Three ways of
+ * not being sure:
  *
- *   - nothing found at all, or
+ *   - nothing found at all
  *   - a leftover segment with real words in it - "two hundred rupees for an auto"
  *     is two words of noise to this parser and a whole entry to a model
+ *   - a segment with a SECOND number still in it after the amount came out, which is
+ *     what "200 petrol 500 milk" looks like when dictation drops the "and"
  *
- * either of those means hand it over. A leftover of one stray word is not worth a
- * round trip; that is usually "ok" or "um" or half of a split "fish and chips".
+ * Any of those means hand it over. A leftover of one stray word is not worth a round
+ * trip; that is usually "ok" or "um" or half of a split "fish and chips".
  */
 export function parseSpoken(text, { date } = {}) {
   const fallback = date || todayISO();
@@ -154,15 +180,21 @@ export function parseSpoken(text, { date } = {}) {
 
   const entries = [];
   const leftover = [];
+  let doubtful = 0;
 
   for (const segment of segments) {
     const entry = readSegment(segment, fallback);
-    if (entry) entries.push(entry);
-    else leftover.push(segment);
+    if (!entry) {
+      leftover.push(segment);
+      continue;
+    }
+    if (entry.doubtful) doubtful += 1;
+    delete entry.doubtful;
+    entries.push(entry);
   }
 
   const wordy = leftover.filter((s) => s.split(' ').filter((w) => w.length > 1).length >= 2);
-  const confident = entries.length > 0 && wordy.length === 0;
+  const confident = entries.length > 0 && wordy.length === 0 && doubtful === 0;
 
   return { entries, leftover, confident };
 }

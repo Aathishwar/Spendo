@@ -182,9 +182,10 @@ Next: phase 2, the server and sync.
 ### Known gaps
 
 
-- **Tests cover the server and the pure client modules, not the screens.** 42 of them:
-  sync, sessions, quotas, the bulk parser and the model-reply validator. Everything with
-  a DOM in it is still verified by driving a browser.
+- **Tests cover the server and the pure client modules, not the screens.** 56 of them:
+  sync, sessions, quotas, the bulk parser, the speech transcript, and the model-reply
+  validator. Everything with a DOM in it is still verified by driving a browser - which
+  is how the transcript bug got out, since a desktop browser does not reproduce it.
 - **Search is complete.** Keywords, the amount operators (`>500`, `<200`, `100-500`, an
   exact number) and the date operators (`d:21`, `21-06-2025`, a range, `m:2025-05`,
   `today`, `yesterday`) all work and combine.
@@ -909,6 +910,18 @@ sheet's own guess avoids. `guessed` on each row is what makes a late answer safe
 that already has a real category, or one chosen by hand, is never overwritten by one
 that arrives afterwards.
 
+**Two ways of not being sure, not one.** The second was found on a real phone:
+dictation drops the joining WORD more often than it drops the comma, so "200 petrol and
+500 milk" arrives as "200 petrol 500 milk" - one segment, which this parser reads as two
+hundred rupees of "Petrol 500 milk". One entry, wrong description, half the money gone,
+reported confidently. A segment with a second number still in it after the amount comes
+out is now flagged, and the sentence goes to the model.
+
+It is flagged, **not split**. Splitting at every number turns "iPhone 15 case 2000" into
+fifteen rupees of "case 2000" and "Room 2 rent 5000" into nonsense. A wrong entry is
+worse than a slow one, and reading a sentence that has lost its punctuation is exactly
+what the model is for.
+
 ### The microphone, and the one thing that does leave the origin
 
 Speech recognition in a browser is **not local**. Chrome streams the audio to Google and
@@ -936,6 +949,44 @@ saying nothing produces.
 final transcript through the same callback a natural end uses, and that callback carries
 the flow onwards into the review sheet. Dropping `bulk` first is what makes a close
 mid-sentence a no-op instead of reopening a sheet the person just shut.
+
+### The transcript bug, which shipped
+
+Spoken on a real phone, "200 petrol and 500 milk yesterday" reached the parser as
+
+```
+200 petrol 500 200 petrol 500 200 petrol 500 formal case study
+```
+
+and froze the app while it was doing it. One line:
+
+```js
+for (let i = event.resultIndex; i < event.results.length; i += 1) {
+  if (result.isFinal) settled += `${result[0].transcript} `;   // wrong
+```
+
+**`event.resultIndex` cannot be trusted.** Starting there and appending to a running
+string is what the API documentation implies and what every example online does. Android
+Chrome reports 0 on most events, so every event re-walked the whole list and appended
+every final AGAIN - quadratic in the number of events, which is the freeze, and a
+sentence with one findable amount in it, which is the single wrong row.
+
+`event.results` is CUMULATIVE for the session. So the transcript is rebuilt from all of
+it on every event and never appended to: idempotent no matter how the browser batches
+events, repeats them, or what index it claims. It is also capped at 600 characters, the
+same cap the server applies, so nothing can grow unbounded again.
+
+`server/test/voice.test.js` drives `js/voice.js` with a fake recogniser - it has no DOM
+in it, only `window.SpeechRecognition` - and the first case is that exact event stream.
+The bug was invisible in a desktop browser, which reports an honest `resultIndex`, so
+only a fake that lies the way Android lies would ever have caught it.
+
+**An input shows wherever its scroll happens to be.** The same runaway description
+rendered as "trol 500 formal case 200" - a row that looks corrupted rather than one
+merely too long. `.input-sm` takes `text-overflow: ellipsis`, which Chrome applies to an
+input while it is not focused, which is exactly when it is wanted. Descriptions are also
+capped at 80 in the parser, matching the server, so the two ends agree about what a
+description is.
 
 ### A wait that says nothing reads as a hang
 

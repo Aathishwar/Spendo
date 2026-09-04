@@ -74,6 +74,44 @@ test('amounts spoken as words are refused rather than guessed at', () => {
   assert.equal(r.leftover.length, 2);
 });
 
+/*
+ * Dictation drops the joining word more often than it drops the comma, so this is
+ * the shape a two-item list actually arrives in when it goes wrong - and reading it
+ * as one entry loses half the money while reporting confidence.
+ */
+test('a second number left in a segment sends the whole thing to the model', () => {
+  const r = at('200 petrol 500 milk');
+  assert.equal(r.confident, false);
+  // What it DID find is still returned - it is what gets shown when the model is
+  // unavailable, and one editable row beats an error.
+  assert.equal(r.entries.length, 1);
+});
+
+test('a figure inside a product name is doubt, not a split', () => {
+  // Splitting at every number would read this as "Iphone" and 15 rupees of "case
+  // 2000". Flagging it hands a sentence a model can actually read to the model.
+  const r = at('iphone 15 case 2000');
+  assert.equal(r.confident, false);
+});
+
+test('the shorthands are not mistaken for a second number', () => {
+  for (const text of ['1.5k swiggy', '99.50 tea', '2 lakhs car', '2k rent, 350 petrol']) {
+    assert.equal(at(text).confident, true, text);
+  }
+});
+
+test('a spoken list with the joining word intact is read locally', () => {
+  const r = at('200 petrol and 500 milk yesterday');
+  assert.equal(r.confident, true);
+  assert.deepEqual(r.entries.map(shape), ['out 200 Petrol', 'out 500 Milk']);
+  assert.equal(r.entries[1].date, '2026-09-03');
+});
+
+test('a runaway transcript cannot become a runaway description', () => {
+  const r = at(`200 ${'petrol '.repeat(40)}`);
+  assert.equal(r.entries[0].description.length <= 80, true);
+});
+
 test('a list with one unreadable item in it is not confident either', () => {
   const r = at('200 auto, a couple of hundred for lunch');
   assert.equal(r.entries.length, 1);

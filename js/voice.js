@@ -30,6 +30,13 @@ export function speechSupported() {
  */
 const LANG = 'en-IN';
 
+/*
+ * A spoken list is short. This is the ceiling anyway, and it is the same 600 the
+ * server caps at, so nothing that reaches here can be longer than what would be
+ * accepted at the other end.
+ */
+const MAX_CHARS = 600;
+
 /**
  * Listen until told to stop, or until the browser gives up on its own.
  *
@@ -61,14 +68,35 @@ export function listen({ onText, onEnd, onError }) {
   let settled = '';
   let stopped = false;
 
+  /*
+   * The transcript is REBUILT from every result each time, never appended to.
+   *
+   * This is the bug that shipped. The loop started at `event.resultIndex` and added
+   * each final result to a running string - which is what the API documentation
+   * implies and what every example does. On Android Chrome `resultIndex` is 0 on
+   * most events, so every event re-walked the whole list and appended every final
+   * AGAIN. "200 petrol 500 milk" came out as
+   *
+   *   200 / 200 200 / 200 petrol / 200 petrol 500 / 200 petrol 500 200 petrol 500 / ...
+   *
+   * - quadratic in the number of events, which is why it also froze the app after a
+   * few seconds of talking, and why the parser then found one amount in a sentence
+   * that had three.
+   *
+   * `event.results` is the cumulative list for the whole session, so reading all of
+   * it every time is both correct and idempotent: it does not matter how many events
+   * arrive, how they are batched, or what `resultIndex` claims.
+   */
   recogniser.onresult = (event) => {
+    let done = '';
     let pending = '';
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+    for (let i = 0; i < event.results.length; i += 1) {
       const result = event.results[i];
-      if (result.isFinal) settled += `${result[0].transcript} `;
-      else pending += result[0].transcript;
+      if (result.isFinal) done += `${result[0].transcript} `;
+      else pending += `${result[0].transcript} `;
     }
-    onText?.(`${settled}${pending}`.replace(/\s+/g, ' ').trim(), false);
+    settled = done.replace(/\s+/g, ' ').trim().slice(0, MAX_CHARS);
+    onText?.(`${settled} ${pending}`.replace(/\s+/g, ' ').trim().slice(0, MAX_CHARS), false);
   };
 
   recogniser.onerror = (event) => {
@@ -91,7 +119,7 @@ export function listen({ onText, onEnd, onError }) {
   recogniser.onend = () => {
     if (stopped) return;
     stopped = true;
-    onEnd?.(settled.replace(/\s+/g, ' ').trim());
+    onEnd?.(settled);
   };
 
   try {
@@ -108,7 +136,7 @@ export function listen({ onText, onEnd, onError }) {
       if (stopped) return;
       stopped = true;
       try { recogniser.stop(); } catch { /* already ended */ }
-      onEnd?.(settled.replace(/\s+/g, ' ').trim());
+      onEnd?.(settled);
     }
   };
 }

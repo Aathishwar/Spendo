@@ -53,7 +53,7 @@ of emailed, which is enough to test signing in end to end. That fallback is refu
 
 ```
 cd server
-npm test                         # 42 tests: the real SQL against an in-memory Postgres,
+npm test                         # 56 tests: the real SQL against an in-memory Postgres,
                                  # the bulk parser, and what the model is allowed to
                                  # hand back
 node test/fake-server.js         # a stand-in server, for driving the client with no database

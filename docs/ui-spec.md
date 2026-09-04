@@ -642,6 +642,10 @@ Chips inside a row take `.chip-raised` (`--surface`). The default chip backgroun
 category and direction chips came out looking like plain text with an icon beside them.
 Everything changeable in a row now shares one surface.
 
+**A value too long for its box reads from the START, with an ellipsis.** An unfocused
+input otherwise shows wherever its scroll sits, and a long description shipped rendering
+as "trol 500 formal case 200" - which reads as a corrupted row rather than a long one.
+
 **An unticked row is dimmed to 0.55, never hidden and never struck through.** The reason
 somebody unticks a row is usually that the amount is wrong, and the next thing they may
 do is fix it and tick it again. A row that disappeared would make that a re-dictation.

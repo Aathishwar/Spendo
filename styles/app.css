@@ -2160,6 +2160,15 @@ button { font: inherit; color: inherit; }
   padding: 0 var(--space-3);
   font-size: var(--text-row);
   background: var(--surface);
+  /*
+   * A value too long for the box reads from its START, with an ellipsis.
+   *
+   * Without this an unfocused input shows wherever its scroll happens to be, and a
+   * long description landed showing "trol 500 formal case 200" - a row that looks
+   * corrupted rather than one that is merely too long to fit. Chrome applies this to
+   * an input only while it is not focused, which is exactly when it is wanted.
+   */
+  text-overflow: ellipsis;
 }
 .field-money-sm { flex: none; width: 7rem; }
 .field-money-sm .field-prefix { left: var(--space-3); font-size: 1rem; }
