@@ -83,6 +83,25 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (store.settings().theme === 'system') applyTheme('system');
 });
 
+/*
+ * And again every time the window comes back, because the installed app's status bar
+ * is not ours alone.
+ *
+ * Android paints the bar from the manifest's theme_color when the app is launched or
+ * resumed from the home screen, and from this meta only while the page is running.
+ * One value in a manifest cannot be two themes, so the two disagree by design and the
+ * bar came back white over a dark app on a warm launch. Re-asserting on resume hands
+ * it back to the page, which is the half that knows which theme is on.
+ *
+ * It also covers the cold start where Chrome answers prefers-color-scheme before the
+ * system value is known: boot-theme.js then wrote the light colour, and nothing after
+ * it fired a media-query change to correct the bar.
+ */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) applyTheme(store.settings().theme);
+});
+window.addEventListener('pageshow', () => applyTheme(store.settings().theme));
+
 /* ----------------------------------------------------------------- install */
 
 function installState() {
