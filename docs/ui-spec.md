@@ -785,7 +785,7 @@ for decoration:
 | Question | Answer |
 |---|---|
 | Is this a new screen? | The whole screen fades in at once with the faintest zoom, 98.5% to full - Material's "fade through" - on a tab change and when the app opens or reloads. A stepped month slides in 24px from the side it lies on instead, earlier from the left and later from the right - Material's "shared axis". Navigation only. |
-| How big is this number? | The chart's bars grow out of the baseline they are measured from, which is the direction the magnitude is read in, and the balance meter fills from the left for the same reason. |
+| How big is this number? | The chart's bars grow out of the baseline they are measured from, which is the direction the magnitude is read in, and the balance meter fills from the left for the same reason. On Insights the donut sweeps round clockwise from twelve, the order its slices are laid out in, and each category's bar grows from the left. |
 | What did that change? | A save, an edit or a delete counts every figure on Home to its new value, slides the meter to its new length, and grows or shrinks only the bars it changed. |
 | Did my tap land? | Sheet and backdrop entrance and exit, snackbar rise, press scales, the nav pill growing behind the active icon, one vibration tick where a swipe crosses into delete. |
 

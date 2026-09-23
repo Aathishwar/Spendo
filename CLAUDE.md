@@ -1092,7 +1092,7 @@ head.
 `spendo.place`. The owner hit it pulling to refresh on Insights and landing on Home. A fresh
 launch starts on Home, and an "Add expense" shortcut launch always does.
 
-Three things worth knowing before touching it:
+Four things worth knowing before touching it:
 
 - **Closing a `<dialog>` queues its close event; it does not fire it.** Delaying
   `sheet.close()` for an exit animation means a sheet opened during the exit would be emptied
@@ -1103,6 +1103,11 @@ Three things worth knowing before touching it:
   reply landing in those 180ms would otherwise repaint - and `paintBulk()` and `paintMonth()`
   reopen a sheet they think is wanted. `letGoOfSheet()` runs at the start of `closeSheet()`
   and again on the close event.
+- **`clip-path: polygon()` does not interpolate between different numbers of points.** The
+  donut's sweep went from 3 points to 7, so it held a sliver and then swapped in the whole
+  ring in one frame at the eased half-way mark - found only when the owner said the chart
+  "shows up like a blink". It is a conic mask on a registered `--sweep` angle now. Sample
+  a computed value across frames before believing a keyframe animates.
 - **`capture()` before, `playChanges()` after, and only for the same screen and month.**
   `render()` decides that with `lastPaint`; the keys on `data-roll` carry no month, so the
   guard is what stops September's balance counting into August's.

@@ -1910,12 +1910,38 @@ button { font: inherit; color: inherit; }
 .donut-slice.is-dimmed,
 .cat-row.is-dimmed { animation: step-back var(--dur-state) var(--ease); }
 
-/* The donut draws itself round once on entry, in the direction it is read. */
-@keyframes donut-sweep {
-  from { clip-path: polygon(50% 50%, 50% 0, 50% 0); }
-  to   { clip-path: polygon(50% 50%, 50% 0, 150% -50%, 150% 150%, -50% 150%, -50% -50%, 50% 0); }
+/*
+ * The donut draws itself round once on entry, clockwise from twelve - the way its
+ * slices are laid out, so the first category arrives first.
+ *
+ * It used to animate a clip-path from a 3-point polygon to a 7-point one, and polygons
+ * with different numbers of points do not interpolate: the browser held the 3-point
+ * sliver until the eased progress passed half way, about 140ms in, and then swapped in
+ * the whole ring in one frame. It never swept; it blinked. A conic mask whose angle is
+ * a registered property interpolates like any other number. Without @property the
+ * ring just appears, which is what it was doing anyway.
+ */
+@property --sweep {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 360deg;
 }
-.view.is-entering .chart-donut { animation: donut-sweep 640ms var(--ease); }
+@keyframes donut-sweep {
+  from { --sweep: 0deg; }
+  to   { --sweep: 360deg; }
+}
+.view.is-entering .chart-donut {
+  -webkit-mask-image: conic-gradient(#000 var(--sweep), transparent 0);
+  mask-image: conic-gradient(#000 var(--sweep), transparent 0);
+  animation: donut-sweep 640ms var(--ease) 60ms backwards;
+}
+
+/* Each category's bar grows from the left on arrival, after the ring has started -
+   the same reading as the balance meter, one bar per category. */
+.chart-rowbar rect { transform-box: fill-box; transform-origin: left center; }
+.view.is-entering .chart-rowbar rect {
+  animation: meter-fill var(--dur-count) var(--ease) 200ms backwards;
+}
 
 /* A newly saved row lights up briefly so the eye can find it in a list it did not
    have to re-read. */
