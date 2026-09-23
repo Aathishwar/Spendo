@@ -255,6 +255,7 @@ spendo/
     xlsx.js             .xlsx export: a ZIP and some XML, written by hand
     bulk.js             several expenses out of one sentence, with no model
     voice.js            the microphone, wrapped thinly. Returns words, parses nothing
+    motion.js           rows gliding to new places when the list re-sorts (FLIP, no library)
     boot-theme.js       blocking, sets the theme before the first paint
   sw.js                 service worker, offline shell
   manifest.webmanifest
@@ -1038,6 +1039,73 @@ turned it off.
   those were rewritten to `const x = __m_x;` against an identifier nothing defined - a
   ReferenceError on the first line of the bundle, and a blank page rather than a degraded
   one. The list has to be COMPLETE, not merely ordered.
+
+## Sorting Home by amount (2026-09-23)
+
+A toggle beside search: on, the list is largest first, spending before money received; off,
+newest first again. Kept for the session only, with the tab and month, so a reload keeps it
+and a fresh launch does not. The rules are in `docs/ui-spec.md` under Home; two things found
+building it are worth keeping:
+
+- **`is-entering` outlives the navigation that set it.** The class stays on `.view` until the
+  next render without `animate`, and any rule of the form `.view.is-entering <descendant>`
+  replays on nodes repainted under it. The first re-sort after opening Home faded every row
+  out to nothing and back in on top of its glide, because the old entry stagger was such a
+  rule. The stagger is gone (see the next section); the rules left under `is-entering` are
+  the bars, the meter and the donut, which a row repaint never recreates.
+- **A FLIP measured from a row's true old position is wrong for rows that were out of
+  sight.** The month's largest expense sat at the bottom of the date order, so it crossed
+  the whole window in 320ms and the top of the list stood empty while it did. Only rows seen
+  before or after glide; rows arriving from out of sight rise 16px into place instead.
+
+**Why not anime.js**, which was looked at because the owner asked about animation libraries.
+Its v4 `createLayout()` does exactly this, and it is 119KB minified (41KB gzipped) as one
+ESM file. With no build step there is no tree-shaking, so every phone would download all of
+it for one function. `js/motion.js` does the same job on the Web Animations API, which is
+the engine CSS animations already run on. Revisit if a feature ever needs timelines,
+springs or SVG morphing; vendor the file into `js/vendor/` then, since the CSP and the
+no-CDN rule both forbid loading it from anywhere else.
+
+## Motion that shows what changed (2026-09-23)
+
+Asked for by the owner as "animations that make it feel premium". Everything added answers
+one of the questions in the Motion section of `docs/ui-spec.md`; none of it is decoration.
+Figures on Home count to their new values after a save, edit or delete, the meter and the
+changed bars follow them, a stepped month pages in from its own side, the balance meter
+fills on arrival, sheets play an exit, a theme switch cross-fades, a category on Insights
+unfolds, and a swipe ticks the motor once at the delete threshold. All of it is off under
+`prefers-reduced-motion`, through the duration tokens, including the JS parts.
+
+**The screen entrance was replaced, at the owner's request.** Every card rising 10px in
+turn, then the first rows, read as things flying in from below on every launch and tab
+change. A new screen now fades in whole with a 98.5% zoom (Material's fade through), and a
+stepped month slides in 24px from its side (shared axis), both from `enter()` in
+`js/motion.js`. It is WAAPI with a cancel-if-unfinished timer rather than a CSS rule on
+`.view`, for two reasons: a class that is already on the element does not restart its
+animation, and the first frame is the whole screen at opacity 0, which is exactly the
+state CLAUDE.md says must never depend on an animation succeeding. `.app` has
+`overflow-x: clip` so the rightward slide cannot make the page scroll sideways; `clip`
+rather than `hidden`, because `hidden` makes a scroll container and unpins the sticky list
+head.
+
+**A reload keeps the tab, the month and the sort**, in `sessionStorage` under
+`spendo.place`. The owner hit it pulling to refresh on Insights and landing on Home. A fresh
+launch starts on Home, and an "Add expense" shortcut launch always does.
+
+Three things worth knowing before touching it:
+
+- **Closing a `<dialog>` queues its close event; it does not fire it.** Delaying
+  `sheet.close()` for an exit animation means a sheet opened during the exit would be emptied
+  by the old sheet's close event arriving afterwards. `showSheet()` therefore cancels a close
+  in progress instead of finishing it, so the dialog never closes and no event is queued.
+  Every opener goes through it; a bare `showModal()` elsewhere reintroduces the bug.
+- **A sheet's state is let go when its exit begins, not when it ends.** A write-up or sign-in
+  reply landing in those 180ms would otherwise repaint - and `paintBulk()` and `paintMonth()`
+  reopen a sheet they think is wanted. `letGoOfSheet()` runs at the start of `closeSheet()`
+  and again on the close event.
+- **`capture()` before, `playChanges()` after, and only for the same screen and month.**
+  `render()` decides that with `lastPaint`; the keys on `data-roll` carry no month, so the
+  guard is what stops September's balance counting into August's.
 
 ## Installing
 

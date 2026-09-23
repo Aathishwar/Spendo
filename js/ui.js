@@ -43,11 +43,20 @@ function monthSwitcher(ym) {
     </div>`;
 }
 
-function figure(label, value, note) {
+/**
+ * Marks a figure that counts to its new value when a save or a delete changes it,
+ * rather than being swapped. js/motion.js reads these and render() decides when; the
+ * text written here is still what the figure lands on.
+ */
+function roll(key, value, as = 'money') {
+  return ` data-roll="${esc(key)}" data-value="${Number(value) || 0}" data-roll-as="${as}"`;
+}
+
+function figure(label, value, note, rolls = '') {
   return `
     <div class="figure">
       <p class="stat-label">${esc(label)}</p>
-      <p class="stat-value money">${esc(value)}</p>
+      <p class="stat-value money"${rolls}>${esc(value)}</p>
       ${note ? `<p class="stat-note">${esc(note)}</p>` : ''}
     </div>`;
 }
@@ -112,19 +121,29 @@ export function entryRow(e, { showCategory = true, swipe = true } = {}) {
     </div>`;
 }
 
-/** A list section header: the section's mark, its name, and an optional control. */
-function listHead(iconName, title, action) {
+/** A list section header: the section's mark, its name, and any controls. */
+function listHead(iconName, title, ...actions) {
   const mark = iconName.startsWith('img:') ? imgIcon(iconName.slice(4)) : icon(iconName);
   return `
     <div class="list-head">
       <span class="list-head-icon">${mark}</span>
       <h2 class="section-title">${esc(title)}</h2>
-      ${action ? `
-        <button class="list-head-btn ${action.on ? 'is-on' : ''}" data-action="${esc(action.id)}"
-          type="button" aria-label="${esc(action.label)}" aria-expanded="${Boolean(action.on)}">
-          ${icon(action.icon)}
-        </button>` : ''}
+      ${actions.map(listHeadButton).join('')}
     </div>`;
+}
+
+/*
+ * A header control either opens something or switches something on, and says which:
+ * aria-expanded for the first, aria-pressed for a `toggle`. Announcing a switch as
+ * "expanded" tells a screen reader to look for a panel that never appears.
+ */
+function listHeadButton(action) {
+  const state = action.toggle ? 'aria-pressed' : 'aria-expanded';
+  return `
+    <button class="list-head-btn ${action.on ? 'is-on' : ''}" data-action="${esc(action.id)}"
+      type="button" aria-label="${esc(action.label)}" ${state}="${Boolean(action.on)}">
+      ${icon(action.icon)}
+    </button>`;
 }
 
 /**
@@ -170,11 +189,11 @@ export function ledgerFoot(entries) {
     <div class="ledger-foot">
       <div class="ledger-foot-cell">
         <span class="ledger-foot-label">Money in</span>
-        <span class="ledger-foot-value money ${received ? 'is-in' : ''}">${esc(figureOf(received, 'in'))}</span>
+        <span class="ledger-foot-value money ${received ? 'is-in' : ''}"${roll('foot-in', received, 'in')}>${esc(figureOf(received, 'in'))}</span>
       </div>
       <div class="ledger-foot-cell">
         <span class="ledger-foot-label">Money out</span>
-        <span class="ledger-foot-value money ${spent ? 'is-out' : ''}">${esc(figureOf(spent, 'out'))}</span>
+        <span class="ledger-foot-value money ${spent ? 'is-out' : ''}"${roll('foot-out', spent, 'out')}>${esc(figureOf(spent, 'out'))}</span>
       </div>
     </div>`;
 }
@@ -261,14 +280,14 @@ export function screenToday(ctx) {
   const balanceCard = `
     <section class="card hero-card">
       <p class="hero-label">Balance left</p>
-      <p class="hero-figure money">${esc(money(stats.balance))}</p>
+      <p class="hero-figure money"${roll('balance', stats.balance)}>${esc(money(stats.balance))}</p>
       <div class="meter" role="img"
         aria-label="${esc(money(stats.spent))} of ${esc(money(pot))} used, ${Math.round(used * 100)} percent">
-        <span class="meter-fill" style="width:${(used * 100).toFixed(1)}%"></span>
+        <span class="meter-fill" data-meter="pot" style="width:${(used * 100).toFixed(1)}%"></span>
       </div>
       <p class="hero-note">
-        <span class="money">${esc(money(stats.spent))}</span> of
-        <span class="money">${esc(money(pot))}</span> used
+        <span class="money"${roll('spent', stats.spent)}>${esc(money(stats.spent))}</span> of
+        <span class="money"${roll('pot', pot)}>${esc(money(pot))}</span> used
         ${stats.isCurrent ? `<span class="dot-sep"></span> ${esc(plural(stats.daysLeft, 'day', 'days'))} left` : ''}
       </p>
     </section>`;
@@ -288,11 +307,14 @@ export function screenToday(ctx) {
 
   const figures = `
     <div class="figures">
-      ${figure('Avg per day', money(Math.round(stats.avgPerDay)), `over ${plural(stats.dayNow, 'day', 'days')}`)}
+      ${figure('Avg per day', money(Math.round(stats.avgPerDay)), `over ${plural(stats.dayNow, 'day', 'days')}`,
+        roll('avg', Math.round(stats.avgPerDay)))}
       ${stats.isCurrent
-        ? figure('Safe per day', money(Math.round(stats.safePerDay)), `${plural(stats.daysLeft, 'day', 'days')} left`)
-        : figure('Received', money(stats.received), 'this month')}
-      ${figure('Entries', String(stats.count), stats.isCurrent ? 'so far' : 'in total')}
+        ? figure('Safe per day', money(Math.round(stats.safePerDay)), `${plural(stats.daysLeft, 'day', 'days')} left`,
+          roll('safe', Math.round(stats.safePerDay)))
+        : figure('Received', money(stats.received), 'this month', roll('received', stats.received))}
+      ${figure('Entries', String(stats.count), stats.isCurrent ? 'so far' : 'in total',
+        roll('entries', stats.count, 'count'))}
     </div>`;
 
   const search = ctx.search || { open: false, query: '' };
@@ -303,6 +325,15 @@ export function screenToday(ctx) {
   const list = entries.length
     ? `<section class="list list-scroll">
         ${listHead('img:bill', 'Transactions', {
+          id: 'toggle-sort',
+          // Phosphor names this glyph sort-ascending for its arrow. What it draws is
+          // a long bar over shorter ones, which is what the list looks like with the
+          // sort on, and at 22px the bars are what is read.
+          icon: 'sort-ascending',
+          label: 'Sort by amount, largest first',
+          on: ctx.order === 'amount',
+          toggle: true
+        }, {
           id: 'toggle-search',
           icon: 'magnifying-glass',
           label: search.open ? 'Close search' : 'Search transactions',

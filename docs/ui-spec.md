@@ -65,6 +65,12 @@ compliance we are not testing for.
 Four tabs plus modal surfaces. Every screen is a single scrolling column, `max-width 560px`,
 centred on wider viewports, `padding-inline: var(--space-4)`.
 
+**A reload keeps your place.** The pull-down on a phone, or the reload the app does after an
+update, comes back to the same tab, month and list order - it used to land on Home every
+time. Opening the app fresh still starts on Home, in the current month, newest first; the
+place is kept in `sessionStorage`, which ends with the app. A launch from the "Add expense"
+shortcut always lands on Home, where the new row will be.
+
 ### 1. Home
 
 The tab is labelled **Home**. Its internal id stays `today`, because the screen is scoped to
@@ -114,6 +120,21 @@ Top to bottom:
    **It appears on this screen only.** On History it would be ambiguous, since that screen is
    a list of months and an entry has to land in one of them; on Insights and Settings adding
    is not the action of the screen.
+
+**Sort by amount** is a toggle in the Transactions header, left of search so search keeps
+its place at the edge. On, the list reads largest first: money spent, biggest to smallest,
+then money received, biggest to smallest. Received entries follow rather than lead or
+vanish - the button answers "where did my money go", a salary at the top of that answer is
+an answer to a different question, and a sort that hid rows would be a filter whose totals
+no longer matched the list. Equal amounts keep newest first. Off, the list is back to
+newest first. It is `aria-pressed`, not `aria-expanded`, because it switches a state rather
+than opening a panel.
+
+It survives a tab change, a month step, a save, a delete and a reload, and ends with the
+session: the app always opens newest first, so a list sorted days ago never looks like
+entries went missing from the top. It applies to Home only - the rows Insights lists under a category keep their
+date order. Toggling it scrolls the list window back to its top, since either order is read
+from there, and never moves the page.
 
 **Spending per day** sits between the balance card and the list, one bar per day of the
 month with the even-spread budget drawn under them as a dashed reference line. Tapping a day
@@ -267,8 +288,9 @@ you are seeing. When the query matches nothing here but something elsewhere, the
 the field says so and offers to jump: "Nothing in August 2026. 1 match in other months". That
 jump keeps the query and the focus, so the user carries on typing.
 
-Results are newest first, the same order as the unfiltered list, and reuse the row component
-exactly. The note reports the count and the total spent.
+Results are in the same order as the unfiltered list - newest first, or largest first with
+the sort on - and reuse the row component exactly. The note reports the count and the total
+spent.
 
 Operators carried over from the old bot: `>500`, `>=500`, `<200`, `<=200`, `100-500`, and a
 bare number for an exact amount. Everything else is a keyword, and all keywords must match,
@@ -426,7 +448,7 @@ total line is on screen. Checked at the worst case: expanded button plus eight-d
 (`+₹98,76,543` / `-₹56,31,427`) still clears by 42px with no wrap.
 
 It sums **the rows actually listed**, so a filtered list gets the filtered totals, and
-`updateSearchResults()` repaints it on every keystroke alongside the rows. A month total
+`paintList()` repaints it on every keystroke alongside the rows. A month total
 under a search result would be a total of things not on screen.
 
 Zero gets no sign and no colour. Nothing has no direction, and `-₹0` is not a total.
@@ -757,21 +779,61 @@ Telegram gave it no other vocabulary. This app has icons.
 
 ## Motion
 
-`MOTION_INTENSITY 4`. Every animation answers one of three questions, and nothing animates
+`MOTION_INTENSITY 4`. Every animation answers one of four questions, and nothing animates
 for decoration:
 
 | Question | Answer |
 |---|---|
-| Is this a new screen? | Cards rise and fade in sequence, then the first rows behind them. Runs on navigation only. |
-| How big is this number? | The chart's bars grow out of the baseline they are measured from, which is the direction the magnitude is read in. |
-| Did my tap land? | Sheet and backdrop entrance, snackbar rise, press scales, the nav pill growing behind the active icon. |
+| Is this a new screen? | The whole screen fades in at once with the faintest zoom, 98.5% to full - Material's "fade through" - on a tab change and when the app opens or reloads. A stepped month slides in 24px from the side it lies on instead, earlier from the left and later from the right - Material's "shared axis". Navigation only. |
+| How big is this number? | The chart's bars grow out of the baseline they are measured from, which is the direction the magnitude is read in, and the balance meter fills from the left for the same reason. |
+| What did that change? | A save, an edit or a delete counts every figure on Home to its new value, slides the meter to its new length, and grows or shrinks only the bars it changed. |
+| Did my tap land? | Sheet and backdrop entrance and exit, snackbar rise, press scales, the nav pill growing behind the active icon, one vibration tick where a swipe crosses into delete. |
 
-The entry stagger is deliberately **not** run when a row is saved or deleted. Re-animating a
-whole list because one row changed reads as the app restarting. `render()` takes an `animate`
-flag and only navigation passes it.
+**The screen arrives in one piece.** It used to cascade - each card rising 10px in turn,
+then the first rows - for most of a second on every tab change and every launch, and the
+owner found it busy. One fade for everything reads as calm and is over in `--dur-sheet`.
+The bars, the meter and the donut still draw themselves inside it, because they carry the
+numbers. It is driven from `enter()` in `js/motion.js` rather than CSS, so a screen can
+never be stranded on the transparent first frame: an entrance that has not finished when it
+should have is cancelled, and the screen is simply there.
+
+The entrance is deliberately **not** run when a row is saved or deleted. Re-animating a
+whole screen because one row changed reads as the app restarting. `render()` takes an
+`animate` flag and only navigation passes it. The chart's bars follow the same rule: they
+used to grow from nothing on every repaint, so one saved expense replayed all thirty. They
+grow on arrival only now, and a save moves just the bars it changed.
+
+**Figures count; they are never wrong at rest.** The renderer writes the true text, and
+`js/motion.js` counts from the old value to it over `--dur-count`, landing on that exact text
+whatever happens - a phone that locks mid-count still lands, by a timer. A figure is counted
+only when the SAME screen and month is repainted, so stepping from September to August never
+counts one balance into the other. Arriving at Home shows the balance at once: it is glanced
+at, and a number that is wrong for half a second on every visit is a cost paid every visit.
+
+**A sheet leaves the way it came.** It drops 24px and fades over `--dur-state` while the
+backdrop lifts, and only then does the dialog close - Escape, the back gesture and a tap on the
+backdrop all take the same exit. It is inert while it leaves, so a second tap on Save cannot
+save twice.
+
+**A theme switch cross-fades** through a view transition, where the browser has them.
+Without them, or under reduced motion, it switches at once as before.
+
+**The vibration tick is Android only** - Safari has no vibration API - and it is ten
+milliseconds, once, as a swipe crosses the delete threshold. It is feedback for a thumb that
+is on the row while the eye may not be.
 
 A newly saved row flashes `--brand-tint` once and is scrolled into view, so a save in a long
 list is findable without re-reading it.
+
+**Re-sorting is a state transition, and the rows show it.** Rows on screen before or after
+the sort glide from their old place to their new one over `--dur-move`, so the eye can follow
+the largest few to the top instead of reading a list that simply blinked into a new order.
+Rows arriving from out of sight do not make the whole trip - measured from where they really
+were, the month's largest expense crossed the entire window and left the top of it empty
+while it did - they rise 16px into place from the side they came from. Rising rows pass over
+sinking ones, and arriving rows go under both, because a half-faded row laid over one gliding
+through its slot shows two lines of text at once. The measuring is `js/motion.js`, on the
+Web Animations API: CSS cannot animate "to wherever the layout puts you next".
 
 All of it collapses under `prefers-reduced-motion`, which zeroes every duration and delay
 globally rather than per rule.

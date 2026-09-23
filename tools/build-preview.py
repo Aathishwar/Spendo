@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # defines, which is a ReferenceError on the first line of the bundle - a blank
 # page, not a degraded one. identity, sync, ai and categorise were all missing.
 MODULES = [
-    'format', 'categories', 'charts', 'xlsx', 'voice',
+    'format', 'categories', 'charts', 'xlsx', 'voice', 'motion',
     'identity', 'store', 'bulk', 'categorise', 'ai', 'sync', 'ui',
 ]
 ENTRY = 'app'

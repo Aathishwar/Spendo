@@ -58,6 +58,10 @@ button { font: inherit; color: inherit; }
      scroll the whole page sideways. */
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 1fr auto;
+  /* A month stepping forward slides the screen in from 24px to the right, and for
+     that moment it overhangs the edge. `clip`, not `hidden`: it cuts the overhang
+     without making this a scroll container, which would unpin the sticky list head. */
+  overflow-x: clip;
 }
 
 .view {
@@ -255,12 +259,16 @@ button { font: inherit; color: inherit; }
   background: var(--on-hero-track);
   overflow: hidden;
 }
+/* The width transition carries a save's effect on the pot: js/motion.js redraws the
+   fill at its old width and lets go, and the balance counts down alongside it over
+   the same --dur-count. */
 .meter-fill {
   display: block;
   height: 100%;
   border-radius: inherit;
   background: var(--on-hero);
-  transition: width var(--dur-sheet) var(--ease);
+  transform-origin: left center;
+  transition: width var(--dur-count) var(--ease);
 }
 
 .meter-sm {
@@ -457,7 +465,13 @@ button { font: inherit; color: inherit; }
  * chosen one. Opacity, not a second hue: the chart is one series, and a bar in a
  * different colour would read as a different kind of day.
  */
-.chart-bar { transition: opacity var(--dur-state) var(--ease); }
+/* Each bar scales from its own foot, so when a save changes a day - or a new peak
+   rescales the month - js/motion.js can grow or shrink it from the baseline. */
+.chart-bar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: opacity var(--dur-state) var(--ease);
+}
 .chart-daily.has-pin .chart-bar { opacity: 0.32; }
 .chart-daily.has-pin .chart-bar.is-active { opacity: 1; }
 .chart-hit.is-active { fill: var(--brand-tint); }
@@ -653,6 +667,10 @@ button { font: inherit; color: inherit; }
   z-index: 1;
   background: var(--bg);
 }
+
+/* Two controls sit beside this title, so at 200% text on a 320px phone "Transactions"
+   no longer fits. It is cut with an ellipsis rather than drawn under the buttons. */
+.list-scroll .list-head .section-title { overflow: hidden; text-overflow: ellipsis; }
 
 .list-scroll .group-rows {
   flex: 1;
@@ -1452,6 +1470,19 @@ button { font: inherit; color: inherit; }
   to   { transform: translateY(0);    opacity: 1; }
 }
 
+/*
+ * Leaving: the way it came in, backwards and quicker - an exit is shorter than an
+ * entrance because the reader has already moved on. The backdrop lifts with it. The
+ * dialog is still open throughout; app.js closes it when this has played, and makes
+ * it inert meanwhile so nothing in a leaving sheet can be pressed twice.
+ */
+.sheet.is-closing { animation: sheet-out var(--dur-state) var(--ease-exit) forwards; }
+.sheet.is-closing::backdrop { animation: fade-out var(--dur-state) var(--ease-exit) forwards; }
+@keyframes sheet-out {
+  to { transform: translateY(24px); opacity: 0; }
+}
+@keyframes fade-out { to { opacity: 0; } }
+
 .sheet-body {
   display: flex;
   flex-direction: column;
@@ -1823,42 +1854,29 @@ button { font: inherit; color: inherit; }
 /* ------------------------------------------------------------------ motion */
 
 /*
- * MOTION_INTENSITY 4. Every animation below answers one of three questions and
- * nothing animates for decoration:
+ * MOTION_INTENSITY 4. Every animation below answers one of these and nothing
+ * animates for decoration:
  *
- *   is this a new screen?      the entry stagger, on navigation only
- *   how big is this number?    the bars growing from their baseline
+ *   is this a new screen?      the screen arriving whole: enter() in js/motion.js
+ *   how big is this number?    the bars and the meter growing from where they are read
+ *   what did that change?      figures counting, bars and meter following them
  *   did my tap land?           the sheet, the snackbar, the press scales
  *
- * The stagger is deliberately NOT run when a row is saved or deleted. Re-animating
- * a whole list because one row changed reads as the app restarting.
+ * A new screen used to arrive as a cascade - each card rising 10px in turn, then the
+ * first rows - which ran for most of a second on every tab change and every launch.
+ * It is one fade now, for the whole screen, driven from JS so a screen can never be
+ * left at the transparent first frame of it. `.is-entering` still marks the arrival,
+ * for the drawings below that carry numbers.
  */
-
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: none; }
-}
-
-.view.is-entering > * {
-  animation: rise 340ms var(--ease) backwards;
-}
-.view.is-entering > *:nth-child(1) { animation-delay: 0ms; }
-.view.is-entering > *:nth-child(2) { animation-delay: 40ms; }
-.view.is-entering > *:nth-child(3) { animation-delay: 80ms; }
-.view.is-entering > *:nth-child(4) { animation-delay: 120ms; }
-.view.is-entering > *:nth-child(n+5) { animation-delay: 150ms; }
-
-/* Rows carry the stagger one level deeper, capped so a long list does not turn into
-   a slow cascade the reader has to sit through. */
-.view.is-entering .group-rows > *:nth-child(1) { animation: rise 300ms var(--ease) 170ms backwards; }
-.view.is-entering .group-rows > *:nth-child(2) { animation: rise 300ms var(--ease) 205ms backwards; }
-.view.is-entering .group-rows > *:nth-child(3) { animation: rise 300ms var(--ease) 240ms backwards; }
-.view.is-entering .group-rows > *:nth-child(4) { animation: rise 300ms var(--ease) 270ms backwards; }
-.view.is-entering .group-rows > *:nth-child(n+5) { animation: rise 300ms var(--ease) 295ms backwards; }
 
 /* The bars grow out of the baseline they are measured from, which is the one place
    in the app where motion carries meaning rather than polish: it shows the reader
-   which direction the magnitude is read in. */
+   which direction the magnitude is read in.
+
+   On arriving at a screen only. It used to run on every repaint, so saving one
+   expense grew all thirty bars again from nothing - the whole chart restarting
+   because one day changed. A save now moves only the bars it changed; see
+   playChanges() in js/motion.js. */
 @keyframes bars-grow {
   from { transform: scaleY(0); }
   to   { transform: scaleY(1); }
@@ -1866,8 +1884,31 @@ button { font: inherit; color: inherit; }
 .chart-bars {
   transform-box: view-box;
   transform-origin: 0 96px;
-  animation: bars-grow 520ms var(--ease) backwards;
 }
+.view.is-entering .chart-bars { animation: bars-grow 520ms var(--ease) backwards; }
+
+/* A meter fills from empty on arrival, for the same reason and in the same direction
+   as the bars: it is read from the left, so it grows from the left. Delayed until
+   the screen carrying it has mostly faded in. */
+@keyframes meter-fill {
+  from { transform: scaleX(0); }
+  to   { transform: none; }
+}
+.view.is-entering .meter-fill { animation: meter-fill var(--dur-count) var(--ease) 200ms backwards; }
+
+/* A category opened on Insights unfolds under its row instead of appearing in it. */
+@keyframes unfold {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.cat-expand { animation: unfold var(--dur-sheet) var(--ease); }
+
+/* Choosing a category steps the others back gradually rather than in one frame, so
+   the eye sees which way the emphasis moved. Only the fade down: they are repainted
+   dimmed, and this starts them from full. */
+@keyframes step-back { from { opacity: 1; } }
+.donut-slice.is-dimmed,
+.cat-row.is-dimmed { animation: step-back var(--dur-state) var(--ease); }
 
 /* The donut draws itself round once on entry, in the direction it is read. */
 @keyframes donut-sweep {
@@ -1901,7 +1942,14 @@ button { font: inherit; color: inherit; }
  * does not run still applies its target style, so the bar cannot end up invisible.
  */
 
-.fab { animation: rise 300ms var(--ease) backwards; }
+/* The Add button appears the way Material's does: a small scale and a fade, in place.
+   It used to rise from below with the cards, and alone it read as something arriving
+   from off screen rather than a control coming on. */
+@keyframes fab-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: none; }
+}
+.fab { animation: fab-in var(--dur-sheet) var(--ease) backwards; }
 
 /* The nav pill grows behind the active icon rather than appearing under it. */
 .nav-item .nav-pill { transform: scale(0.9); }

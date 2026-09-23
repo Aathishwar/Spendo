@@ -21,6 +21,7 @@ import { guess, remember } from './categorise.js';
 import { parseSpoken } from './bulk.js';
 import { listen, speechSupported } from './voice.js';
 import { workbook } from './xlsx.js';
+import { capture, crossfade, durationOf, enter, glide, playChanges } from './motion.js';
 
 const view = document.getElementById('view');
 const fab = document.getElementById('fab');
@@ -41,6 +42,11 @@ let pendingUndo = null;
 let snackTimer = null;
 let detail = { id: null, editing: null };
 let search = { open: false, query: '' };
+// How Home lists the month: 'date', newest first, or 'amount', largest first. Kept for
+// the session only (see rememberPlace), so the app always OPENS on the order a ledger
+// is read in, and a list sorted last week never greets anyone looking as though
+// entries went missing from the top.
+let order = 'date';
 let sliceId = null;   // the category chosen on Insights, or null
 // The calendar is a mode of whichever sheet is open, not a sheet of its own, so it
 // knows which one to hand the date back to.
@@ -144,7 +150,56 @@ function monthSummaries() {
   });
 }
 
-function render({ animate = false } = {}) {
+/*
+ * Which screen and month the view last showed. A repaint of the same one is the month
+ * changing under the reader - a save, a delete, a sync - and its figures count to
+ * their new values. A repaint of a different one is a new screen, which arrives with
+ * the entry animation instead and has nothing to count from.
+ */
+let lastPaint = { tab: null, ym: null };
+
+/*
+ * Where the reader is - the tab, the month, the list's order - kept so a reload puts
+ * them back there. Pulling down to refresh on Insights used to land on Home, and so
+ * did the reload the app does on its own after an update, which is a reload nobody
+ * even asked for.
+ *
+ * sessionStorage, not localStorage: it survives a reload and ends with the app.
+ * Opened fresh from the home screen, Spendo still starts on Home, this month, newest
+ * first, which is where an app should open.
+ */
+const PLACE_KEY = 'spendo.place';
+const TABS = ['today', 'history', 'insights', 'settings'];
+
+function rememberPlace() {
+  try {
+    sessionStorage.setItem(PLACE_KEY, JSON.stringify({ tab, ym, order }));
+  } catch {
+    /* storage refused: a reload starts on Home, as it always did */
+  }
+}
+
+// Read back, and every field checked on its own: a value this build does not
+// recognise is dropped rather than trusted, and the rest still applies.
+function restorePlace() {
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(PLACE_KEY) || 'null');
+  } catch {
+    return;
+  }
+  if (!saved || typeof saved !== 'object') return;
+  if (TABS.includes(saved.tab)) tab = saved.tab;
+  if (/^\d{4}-\d{2}$/.test(saved.ym) && saved.ym <= currentYM()) ym = saved.ym;
+  if (saved.order === 'amount' || saved.order === 'date') order = saved.order;
+}
+
+/*
+ * `from` is the side a stepped-to month enters from: 'left' going back in time,
+ * 'right' going forward, the way a calendar pages. Without it a new screen fades
+ * through. Only meaningful with `animate`; see enter() in js/motion.js.
+ */
+function render({ animate = false, from = null } = {}) {
   const stats = store.monthStats(ym);
   const ctx = {
     ym,
@@ -156,6 +211,7 @@ function render({ animate = false } = {}) {
     sync: sync.syncStatus(),
     install: installState(),
     search,
+    order,
     sliceId,
     // History only. Both of these walk every month in the ledger, and there is no
     // reason to pay for that while looking at Home.
@@ -166,10 +222,15 @@ function render({ animate = false } = {}) {
     totalEntries: store.totalEntries(),
     ai: store.aiOn()
   };
-  ctx.searchResult = runSearch(ctx.entries, search.query);
+  // Ordered here and not in ctx.entries: Insights lists a category's entries from
+  // that array too, and a sort chosen on Home should not reach into another screen.
+  ctx.searchResult = runSearch(inOrder(ctx.entries), search.query);
 
   // Whatever was parked open belongs to the DOM that is about to be replaced.
   openTrack = null;
+
+  const same = !animate && lastPaint.tab === tab && lastPaint.ym === ym;
+  const before = same ? capture(view) : null;
 
   if (tab === 'today') view.innerHTML = ui.screenToday(ctx);
   else if (tab === 'history') view.innerHTML = ui.screenHistory(ctx);
@@ -193,6 +254,9 @@ function render({ animate = false } = {}) {
   // Insights and Settings it is not the action of the screen.
   fab.hidden = tab !== 'today';
   view.classList.toggle('is-entering', animate);
+  if (before) playChanges(before, view);
+  lastPaint = { tab, ym };
+  rememberPlace();
   if (animate) {
     // Restart the animation on a node the browser has already seen.
     void view.offsetWidth;
@@ -200,6 +264,7 @@ function render({ animate = false } = {}) {
     // save or a delete re-renders too, and throwing the reader back to the top of
     // the month because one row changed loses their place for nothing.
     window.scrollTo(0, 0);
+    enter(view, from || 'through');
   }
   syncScroll();
   // And again after the browser has settled the layout. Focusing the search field
@@ -231,14 +296,66 @@ function syncScroll() {
 
 /* ------------------------------------------------------------------ sheets */
 
+// The timer of a sheet playing out its exit, or null. See closeSheet().
+let closing = null;
+
 function openSheet(html) {
   sheetContent.innerHTML = html;
-  if (!sheet.open) sheet.showModal();
+  showSheet();
   const first = sheetContent.querySelector('input:not([type="date"]), button:not(.icon-btn)');
   if (first && first.tagName === 'INPUT') setTimeout(() => first.focus(), 60);
 }
 
+/*
+ * Open the dialog, or keep it open. A sheet asked for while the last one is still
+ * leaving takes the same dialog over rather than waiting for it to go - and must not
+ * let it go at all, because closing a dialog queues a close event that would arrive
+ * afterwards and empty the new sheet.
+ */
+function showSheet() {
+  if (closing) {
+    clearTimeout(closing);
+    closing = null;
+    sheet.classList.remove('is-closing');
+    sheet.inert = false;
+  }
+  if (!sheet.open) sheet.showModal();
+}
+
+/*
+ * Close by playing the sheet out: it drops and fades while the backdrop lifts, and
+ * only then does the dialog close. It used to vanish in a frame, which is the one
+ * moment of the sheet's life nobody was shown.
+ *
+ * What the sheet holds is let go at the START, not when it is gone. A write-up or a
+ * sign-in reply landing during the exit would otherwise repaint, and a sheet
+ * repainted by code that still thinks it is wanted is a sheet that comes back. It is
+ * inert for the same stretch, so a second tap on Save cannot save twice from a sheet
+ * that is already leaving.
+ */
 function closeSheet() {
+  if (!sheet.open) {
+    sheetContent.innerHTML = '';
+    return;
+  }
+  if (closing) return;
+  const exit = durationOf('--dur-state');
+  if (!exit) {
+    sheet.close();
+    sheetContent.innerHTML = '';
+    return;
+  }
+  letGoOfSheet();
+  sheet.inert = true;
+  sheet.classList.add('is-closing');
+  closing = setTimeout(finishClosing, exit);
+}
+
+function finishClosing() {
+  clearTimeout(closing);
+  closing = null;
+  sheet.classList.remove('is-closing');
+  sheet.inert = false;
   if (sheet.open) sheet.close();
   sheetContent.innerHTML = '';
 }
@@ -562,7 +679,7 @@ function paintMonth(facts, text, gaveUp = false) {
     aiPossible: !gaveUp && account.isSignedIn() && navigator.onLine
   };
   sheetContent.innerHTML = ui.monthSheet(withFlag, text);
-  if (!sheet.open) sheet.showModal();
+  showSheet();
 }
 
 /* -------------------------------------------------------------- spend tips */
@@ -694,7 +811,7 @@ let listener = null;
 function paintBulk() {
   if (!bulk) return;
   sheetContent.innerHTML = ui.bulkSheet(bulk);
-  if (!sheet.open) sheet.showModal();
+  showSheet();
 }
 
 /*
@@ -1026,7 +1143,7 @@ function paintSignIn() {
 
 function openSignIn() {
   signin = { step: 'email', email: account.lastEmail() || '', error: '', busy: false, sending: false };
-  if (!sheet.open) sheet.showModal();
+  showSheet();
   paintSignIn();
 }
 
@@ -1480,7 +1597,25 @@ function paintSwipe(track, raw) {
   // Full strength by the time the row would park, so the label is readable at the
   // point where letting go leaves it on screen.
   track.style.setProperty('--swipe-reveal', String(Math.min(1, raw / PARK)));
-  track.classList.toggle('is-armed', raw >= COMMIT);
+  const armed = raw >= COMMIT;
+  // The point past which letting go deletes is felt as well as seen: one tick, once,
+  // on the way in. A thumb is on the row and the eye may not be.
+  if (armed && !track.classList.contains('is-armed')) tick();
+  track.classList.toggle('is-armed', armed);
+}
+
+/*
+ * The lightest pulse the phone can give, where the page may use its motor. Android
+ * Chrome can; Safari on iOS has no vibration API, so there this does nothing and the
+ * row's own change of weight still says it. Ten milliseconds is a detent under the
+ * thumb - much longer and it is a phone buzzing in the hand.
+ */
+function tick() {
+  try {
+    navigator.vibrate?.(10);
+  } catch {
+    /* no motor, or not allowed yet - the gesture is still drawn */
+  }
 }
 
 function endSwipe(track) {
@@ -1874,13 +2009,36 @@ function runSearch(entries, query) {
   };
 }
 
-/** Repaint only the rows, the note and the total, so the field keeps focus and the caret. */
-function updateSearchResults() {
+/**
+ * Home's list in the order the reader chose.
+ *
+ * Largest first puts spending ahead of money received. The button answers "where did
+ * my money go", and a salary sitting at the top of that answer is an answer to a
+ * different question. Received entries still follow, largest first, rather than
+ * dropping out: a sort that hides rows is a filter, and the totals under the list
+ * would stop adding up to what is on screen.
+ *
+ * Ties keep the newest-first order they arrive in, because sort() is stable.
+ */
+function inOrder(entries) {
+  if (order !== 'amount') return entries;
+  return entries.slice().sort((a, b) =>
+    (a.direction === 'in') - (b.direction === 'in') || b.amount - a.amount);
+}
+
+/**
+ * Repaint only the rows, the note and the total. A search keystroke keeps the field's
+ * focus and caret this way, and a re-sort keeps the rest of the screen still while
+ * the rows glide.
+ */
+function paintList() {
   const rows = document.getElementById('txn-rows');
   const note = document.getElementById('search-note');
   const foot = document.getElementById('txn-foot');
   if (!rows) return;
-  const entries = store.withBalances(ym).reverse();
+  // The row parked open belongs to the nodes about to be replaced.
+  openTrack = null;
+  const entries = inOrder(store.withBalances(ym).reverse());
   const result = runSearch(entries, search.query);
   rows.innerHTML = ui.txnRows(result.entries);
   if (note) note.innerHTML = ui.searchNote(result, monthLabel(ym));
@@ -2149,9 +2307,14 @@ document.addEventListener('click', (e) => {
   }
 
   if (el.dataset.theme) {
-    store.setSetting('theme', el.dataset.theme);
-    applyTheme(el.dataset.theme);
-    render();
+    const theme = el.dataset.theme;
+    store.setSetting('theme', theme);
+    // Every surface changes colour in the same frame, and a hard cut from light to
+    // dark reads as a flash. Cross-faded, it reads as the lights changing.
+    crossfade(() => {
+      applyTheme(theme);
+      render();
+    });
     return;
   }
 
@@ -2246,10 +2409,27 @@ document.addEventListener('click', (e) => {
       if (search.open) focusSearch();
       break;
 
+    case 'toggle-sort': {
+      order = order === 'amount' ? 'date' : 'amount';
+      const on = order === 'amount';
+      // The button is flipped in place rather than by a render. A render would
+      // replace the rows before glide() could measure where they were.
+      el.classList.toggle('is-on', on);
+      el.setAttribute('aria-pressed', String(on));
+      rememberPlace();
+      const rows = document.getElementById('txn-rows');
+      glide(rows, () => {
+        paintList();
+        // Either order is read from its top, so that is where the list goes back to.
+        if (rows) rows.scrollTop = 0;
+      }, (node) => node.dataset.swipeEntry);
+      break;
+    }
+
     case 'search-all': searchAllMonths(); break;
-    case 'prev-month': ym = shiftYM(ym, -1); sliceId = null; render({ animate: true }); break;
+    case 'prev-month': ym = shiftYM(ym, -1); sliceId = null; render({ animate: true, from: 'left' }); break;
     case 'next-month':
-      if (ym < currentYM()) { ym = shiftYM(ym, 1); sliceId = null; render({ animate: true }); }
+      if (ym < currentYM()) { ym = shiftYM(ym, 1); sliceId = null; render({ animate: true, from: 'right' }); }
       break;
     case 'swipe-delete': {
       // The row is parked open, so it is already sitting where the exit animation
@@ -2385,7 +2565,7 @@ document.addEventListener('input', (e) => {
 
   if (el.id === 'search-inline') {
     search.query = el.value;
-    updateSearchResults();
+    paintList();
     return;
   }
 
@@ -2539,8 +2719,27 @@ document.addEventListener('submit', (e) => {
 sheet.addEventListener('click', (e) => {
   if (e.target === sheet) closeSheet();
 });
+
+/*
+ * Escape, and the back gesture on Android, ask the dialog to cancel. That plays out
+ * the same way a tap on the backdrop does. Where the browser will not let the cancel
+ * be prevented, it closes the dialog itself and the close event below still tidies.
+ */
+sheet.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  closeSheet();
+});
+
 sheet.addEventListener('close', () => {
   sheetContent.innerHTML = '';
+  letGoOfSheet();
+});
+
+/*
+ * What a sheet holds that must not outlive it. Called when a close begins, and again
+ * when the dialog has actually closed; everything in here is safe to do twice.
+ */
+function letGoOfSheet() {
   signin = null;
   reviewYM = null;
   /*
@@ -2561,7 +2760,7 @@ sheet.addEventListener('close', () => {
       render();
     }
   }
-});
+}
 
 fab.addEventListener('click', () => openAdd('out'));
 
@@ -2573,6 +2772,15 @@ window.addEventListener('resize', syncScroll);
 /* -------------------------------------------------------------------- boot */
 
 applyTheme(store.settings().theme);
+
+// The manifest declares an "Add expense" shortcut, read here and honoured below.
+const launch = new URLSearchParams(location.search).get('add');
+const addLaunch = launch === 'out' || launch === 'in';
+
+restorePlace();
+// Adding belongs to Home, where the new row will show. A shortcut launch lands there
+// whatever screen the last session was on.
+if (addLaunch) tab = 'today';
 render({ animate: true });
 
 /*
@@ -2623,10 +2831,9 @@ account.refresh().then(() => {
   maybeNudgeSignIn();
 });
 
-// The manifest declares an "Add expense" shortcut. Honour it, or it is a menu item
-// on the user's home screen that does nothing.
-const launch = new URLSearchParams(location.search).get('add');
-if (launch === 'out' || launch === 'in') {
+// The "Add expense" shortcut. Honour it, or it is a menu item on the user's home
+// screen that does nothing.
+if (addLaunch) {
   openAdd(launch);
   history.replaceState(null, '', location.pathname);
 } else if (!store.settings().seenIntro) {
