@@ -97,8 +97,20 @@ export function lastEmail() {
 
 function rememberEmail(email) {
   try {
-    localStorage.setItem(LAST_EMAIL_KEY, email);
+    if (email) localStorage.setItem(LAST_EMAIL_KEY, email);
+    else localStorage.removeItem(LAST_EMAIL_KEY);
   } catch { /* nothing to recover to */ }
+}
+
+/**
+ * Put back the address the phone remembered before a sign-in that was then cancelled.
+ *
+ * A sign-in abandoned at the "entries on this phone" question changed nothing else,
+ * so it must not change this either: the ledger still belongs to whoever it belonged
+ * to, and the next sign-in has to be measured against them.
+ */
+export function restoreLastEmail(previous) {
+  rememberEmail(previous || null);
 }
 
 /* --------------------------------------------------------------- requests */

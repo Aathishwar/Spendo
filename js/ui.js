@@ -292,6 +292,28 @@ export function screenToday(ctx) {
 
   const head = `<header class="topbar">${monthSwitcher(ym)}</header>`;
 
+  if (stats.opening === 0 && stats.count === 0 && ctx.carry) {
+    /*
+     * A new month after one that ended with money left. Most months start with what
+     * the last one finished on, so that is offered as the one-tap answer - but as an
+     * offer, never filled in on its own: money that was moved out of the account
+     * between months is exactly what an automatic carry-over would get wrong.
+     */
+    const { amount, from } = ctx.carry;
+    return head + `
+      <div class="empty">
+        <p class="empty-title">${esc(monthLabel(ym))} has started.</p>
+        <p class="empty-body">${esc(monthLabel(from))} ended with
+          <span class="money">${esc(money(amount))}</span> left. Start ${esc(monthLabel(ym).split(' ')[0])}
+          with it, or set a different amount.</p>
+        <div class="empty-actions">
+          <button class="btn btn-primary" data-action="carry-over" type="button">
+            Carry over ${esc(money(amount))}</button>
+          <button class="btn btn-text" data-action="set-opening" type="button">Set a different amount</button>
+        </div>
+      </div>`;
+  }
+
   if (stats.opening === 0 && stats.count === 0) {
     return head + emptyState(
       `Nothing tracked in ${monthLabel(ym)} yet.`,
@@ -527,6 +549,39 @@ function tipsCard(tips) {
     </section>`;
 }
 
+/*
+ * Budgets: how a meter is coloured. Ink while there is room, amber in the last 15%,
+ * the spending colour once it is over. The words beside it always say the same thing
+ * in figures, so the colour is never the only channel.
+ */
+function budgetTone(used) {
+  return used > 1 ? 'is-over' : used >= 0.85 ? 'is-near' : '';
+}
+
+/**
+ * The add sheet's line under the category chips: what is left in this category's
+ * budget this month, and what will be left after the amount being typed. Empty when
+ * the category has no budget, so the sheet looks as it always did for anyone who
+ * never sets one. app.js repaints it in place as the amount and category change.
+ */
+export function budgetHint(status, label) {
+  if (!status) return '';
+  const typed = status.after !== status.spent;
+  const leftWord = (n) => (n >= 0 ? `${money(n)} left` : `${money(-n)} over`);
+  const shown = typed ? status.usedAfter : status.used;
+  return `
+    <p class="budget-hint-text">
+      ${esc(label)}: <b class="${status.left < 0 ? 'is-over' : ''}">${esc(leftWord(status.left))}</b>
+      of ${esc(money(status.budget))} this month${typed
+        ? ` <span class="dot-sep"></span> after this, <b class="${status.leftAfter < 0 ? 'is-over' : ''}">${esc(leftWord(status.leftAfter))}</b>`
+        : ''}
+    </p>
+    <span class="budget-meter ${budgetTone(shown)}" role="img"
+      aria-label="${Math.round(shown * 100)} percent of the ${esc(label)} budget">
+      <span class="budget-meter-fill" style="width:${Math.min(100, shown * 100).toFixed(1)}%"></span>
+    </span>`;
+}
+
 export function screenInsights(ctx) {
   const { ym, stats, totals } = ctx;
   const dir = ctx.sliceDir === 'in' ? 'in' : 'out';
@@ -585,24 +640,45 @@ export function screenInsights(ctx) {
        <p class="donut-centre-figure money"${roll('donut-total', total)}>${esc(money(total))}</p>
        <p class="donut-centre-sub">${esc(plural(totals.length, 'category', 'categories'))}</p>`;
 
+  const budgets = ctx.budgets || {};
   const list = totals.map((t) => {
     const cat = category(t.id);
     const on = selected === t.id;
+    // A category with a budget reads against the budget; one without keeps its share
+    // of the month. Spending side only - income has no budget.
+    const b = dir === 'out' ? budgets[t.id] : null;
+    const bar = b
+      ? `<span class="budget-meter ${budgetTone(b.used)}"><span class="budget-meter-fill"
+          style="width:${Math.min(100, b.used * 100).toFixed(1)}%"></span></span>
+         <span class="budget-row-note">${b.left < 0
+          ? `<span class="is-over">${esc(money(-b.left))} over</span> <span class="dot-sep"></span> `
+          : ''}of ${esc(money(b.budget))} budget</span>`
+      : rowBarSVG(t.share, t.id);
+    const sub = b
+      ? (b.left < 0 ? 'over' : `${money(b.left)} left`)
+      : `${(t.share * 100).toFixed(t.share < 0.1 ? 1 : 0)}%`;
     return `
       <button class="cat-row ${on ? 'is-chosen' : ''}${selected && !on ? ' is-dimmed' : ''}"
         data-slice="${esc(t.id)}" type="button" aria-pressed="${on}" aria-expanded="${on}">
         <span class="cat-dot" style="background:${seriesVar(t.id)}"></span>
         <span class="cat-main">
           <span class="cat-title">${esc(cat.label)}</span>
-          ${rowBarSVG(t.share, t.id)}
+          ${bar}
         </span>
         <span class="cat-end">
           <span class="row-amount money">${esc(money(t.amount))}</span>
-          <span class="row-sub">${(t.share * 100).toFixed(t.share < 0.1 ? 1 : 0)}%</span>
+          <span class="row-sub${b && b.left < 0 ? ' is-over' : ''}">${esc(sub)}</span>
         </span>
         ${icon(on ? 'caret-up' : 'caret-down', 'cat-caret')}
       </button>
-      ${on ? `<div class="cat-expand">${txnRows(
+      ${on ? `<div class="cat-expand">${dir === 'out' ? `
+        <div class="budget-set">
+          <span class="budget-set-text">${b
+            ? `Budget <b class="money">${esc(money(b.budget))}</b> a month`
+            : 'No monthly budget'}</span>
+          <button class="btn btn-text btn-sm" data-action="set-budget" data-budget-cat="${esc(t.id)}" type="button">
+            ${b ? 'Change' : 'Set a budget'}</button>
+        </div>` : ''}${txnRows(
         ctx.entries.filter((e) => e.category === t.id && e.direction === dir),
         { showCategory: false, swipe: false }
       )}</div>` : ''}`;
@@ -968,6 +1044,46 @@ export function confirmSheet({ title, body, confirmLabel, confirmAction, tone = 
     </div>`;
 }
 
+/**
+ * Asked once, right after signing in, when this phone holds entries no account has.
+ *
+ * Two situations, one sheet. A phone used signed out for a while: those entries are
+ * the person's own, and adding them is the obvious answer, so it is first. A phone
+ * last signed in as somebody else: those are the other person's entries that never
+ * reached their account, and the sheet says whose they are before offering either.
+ */
+export function mergeSheet({ email, previousEmail, count, spent, received }) {
+  const money_ = [];
+  if (spent) money_.push(`${money(spent)} spent`);
+  if (received) money_.push(`${money(received)} received`);
+  const what = `${plural(count, 'entry', 'entries')}${money_.length ? ` (${money_.join(', ')})` : ''}`;
+
+  const body = previousEmail
+    ? `This phone was last signed in as ${previousEmail}, and ${what} of theirs never reached their account. Everything else of theirs is already backed up, and is cleared from this phone either way.`
+    : `This phone has ${what} recorded before you signed in. They are not in any account yet.`;
+
+  return `
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Cancel sign-in">${icon('x')}</button>
+        <h2 class="sheet-title">${previousEmail ? 'Entries from another account' : 'Entries on this phone'}</h2>
+      </div>
+
+      <p class="confirm-body">${esc(body)}</p>
+
+      <div class="merge-actions">
+        <button class="btn btn-primary btn-block" data-action="merge-keep" type="button">
+          ${icon('cloud-check')} Add them to ${esc(email)}
+        </button>
+        <button class="btn btn-danger btn-block" data-action="merge-discard" type="button">
+          ${icon('trash-simple')} Discard them
+        </button>
+        <button class="btn btn-text btn-block" data-action="close-sheet" type="button">Cancel sign-in</button>
+      </div>
+      <p class="merge-note">If the account already has opening money for a month, the account's figure is kept. A discard can be undone for a few seconds.</p>
+    </div>`;
+}
+
 export function introSheet(step) {
   const s = INTRO[step];
   const last = step === INTRO.length - 1;
@@ -1169,7 +1285,7 @@ function orderedCats(cats, chosen) {
   return pick ? [pick, ...cats.filter((c) => c.id !== chosen)] : cats;
 }
 
-export function addSheet({ direction, category: catId, date, amount, description, suggestions, picked }) {
+export function addSheet({ direction, category: catId, date, amount, description, suggestions, picked, budget }) {
   const all = categoriesFor(direction);
   const chosen = catId || all[0].id;
   const cats = orderedCats(all, chosen);
@@ -1221,6 +1337,7 @@ export function addSheet({ direction, category: catId, date, amount, description
               ${icon(c.icon)} ${esc(c.label)}
             </button>`).join('')}
         </div>
+        <div class="budget-hint" data-budget-hint>${budget ? budgetHint(budget, category(chosen).label) : ''}</div>
       </div>
 
       ${dateField(date)}

@@ -38,8 +38,38 @@ const EMPTY = {
   reviews: {},
   // { items, stamp, madeAt }. The last set of spending suggestions. One set, not one
   // per month: they are advice about a habit, and the habit is not a calendar month.
-  tips: null
+  tips: null,
+  // category id -> rupees a month. Spending categories only. Kept with the settings,
+  // on this phone: the server has no table for them yet, so they do not sync.
+  budgets: {}
 };
+
+/*
+ * Stored month by month, not as one value.
+ *
+ * Everything used to be one JSON string under KEY, so saving one cup of tea
+ * re-serialised and rewrote every entry ever made - fine for a month, a visible
+ * stall after a few years. Now KEY holds only the small things (settings, the sync
+ * cursor, write-ups), and each month's entries and opening money live under their
+ * own key. A save rewrites the month it touched and that small record, so its cost
+ * no longer grows with the size of the ledger.
+ *
+ * KEY keeps its name because js/boot-theme.js reads the theme out of it before the
+ * first paint; `settings` is still where it was.
+ */
+const MONTH_PREFIX = `${KEY}.m.`;
+const LEDGER_FIELDS = ['entries', 'months'];
+
+// Every save, or ALL when the whole ledger was replaced. See commit().
+const ALL = 'all';
+// Set by load() when it read the old single-value format, so the first save writes
+// every month. Declared BEFORE load() runs: assigning a `let` above its declaration
+// throws, load()'s catch then returned an empty ledger, and the next save would have
+// written that emptiness over the real one. server/test/store.test.js caught it.
+let migrated = false;
+// Set when what is in storage could not be read. Saving is then refused rather than
+// writing an empty ledger over data that may only be unreadable to this build.
+let unreadable = false;
 
 let state = load();
 const listeners = new Set();
@@ -53,31 +83,115 @@ function load() {
     const parsed = JSON.parse(raw);
     // Merge rather than replace, so a key added in a later version is present on
     // data written by an earlier one.
-    return {
+    const base = {
       ...structuredClone(EMPTY),
       ...parsed,
       settings: { ...EMPTY.settings, ...(parsed.settings || {}) },
       sync: { ...EMPTY.sync, ...(parsed.sync || {}) },
-      reviews: { ...(parsed.reviews || {}) }
+      reviews: { ...(parsed.reviews || {}) },
+      budgets: { ...(parsed.budgets || {}) }
     };
+    delete base.monthKeys;
+
+    // The old single-value format still has the ledger inline. Read it as it is and
+    // let the first save write it out month by month.
+    if (Array.isArray(parsed.entries)) {
+      migrated = true;
+      return base;
+    }
+
+    base.entries = [];
+    base.months = {};
+    for (const ym of monthKeysIn(parsed)) {
+      const rawMonth = localStorage.getItem(MONTH_PREFIX + ym);
+      if (!rawMonth) continue;
+      // One damaged month is skipped, not allowed to empty the whole ledger. It is
+      // left in storage untouched until something writes that month again.
+      try {
+        const m = JSON.parse(rawMonth);
+        if (Array.isArray(m.entries)) base.entries.push(...m.entries);
+        if (m.month) base.months[ym] = m.month;
+      } catch (e) {
+        console.warn(`[store] month ${ym} could not be read, skipped:`, e.message);
+      }
+    }
+    // Months are read in order and each is in entry order, so this is the order the
+    // single array had - which entriesFor's tie-break on createdAt does not rely on,
+    // but the category guesser's "newest last" does.
+    base.entries.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    return base;
   } catch (e) {
     // A private window, cleared site data, or a browser refusing storage. The app
     // still runs; it just forgets when it closes.
     console.warn('[store] could not read local data, starting empty:', e.message);
+    unreadable = true;
     return structuredClone(EMPTY);
   }
 }
 
-function persist() {
+/** The months saved, from the list the small record keeps, or by looking. */
+function monthKeysIn(meta) {
+  if (Array.isArray(meta.monthKeys)) return meta.monthKeys.slice().sort();
+  const found = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(MONTH_PREFIX)) found.push(k.slice(MONTH_PREFIX.length));
+  }
+  return found.sort();
+}
+
+function ledgerMonths() {
+  const set = new Set(Object.keys(state.months));
+  for (const e of state.entries) set.add(e.ym);
+  return set;
+}
+
+/**
+ * Write the months named in `scope` (or every month, for ALL), then the small record.
+ *
+ * Months first: if the browser refuses part way, the small record still lists only
+ * months that were written whole. A month left with nothing in it has its key removed.
+ */
+function persist(scope) {
+  if (unreadable) return;
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    const present = ledgerMonths();
+    const writeAll = scope === ALL || migrated;
+    const targets = writeAll ? present : new Set(scope);
+
+    if (writeAll) {
+      // A replaced ledger can have dropped months; their keys go with them.
+      for (const ym of monthKeysIn({})) if (!present.has(ym)) localStorage.removeItem(MONTH_PREFIX + ym);
+    }
+
+    if (targets.size) {
+      const byMonth = new Map([...targets].map((ym) => [ym, []]));
+      for (const e of state.entries) byMonth.get(e.ym)?.push(e);
+      for (const [ym, entries] of byMonth) {
+        const month = state.months[ym] || null;
+        if (!entries.length && !month) localStorage.removeItem(MONTH_PREFIX + ym);
+        else localStorage.setItem(MONTH_PREFIX + ym, JSON.stringify({ entries, month }));
+      }
+    }
+
+    const meta = { ...state, monthKeys: [...present].sort() };
+    for (const f of LEDGER_FIELDS) delete meta[f];
+    localStorage.setItem(KEY, JSON.stringify(meta));
+    migrated = false;
   } catch (e) {
     console.warn('[store] could not write local data:', e.message);
   }
 }
 
-function commit() {
-  persist();
+/**
+ * Save and tell the listeners.
+ *
+ * `scope` is the months this change touched. Leaving it out saves EVERY month: a
+ * write path that forgets to say what it changed is slower, never lost. Changes to
+ * settings and the like pass an empty list.
+ */
+function commit(scope = ALL) {
+  persist(scope);
   for (const fn of listeners) fn(state);
 }
 
@@ -110,7 +224,7 @@ export function setOpening(ym, amount) {
   m.opening = Number(amount) || 0;
   m.updatedAt = Date.now();
   m.dirty = true;
-  commit();
+  commit([ym]);
 }
 
 export function addOpening(ym, amount) {
@@ -170,19 +284,21 @@ export function addEntry({ amount, direction = 'out', description, category, dat
     dirty: true
   };
   state.entries.push(record);
-  commit();
+  commit([record.ym]);
   return record;
 }
 
 export function updateEntry(entryId, patch) {
   const e = entry(entryId);
   if (!e) return null;
+  const was = e.ym;
   Object.assign(e, patch);
   if (patch.date) e.ym = ymOf(patch.date);
   if (patch.amount != null) e.amount = Math.abs(Number(patch.amount) || 0);
   e.updatedAt = Date.now();
   e.dirty = true;
-  commit();
+  // A new date can move it to another month, and both months change.
+  commit([was, e.ym]);
   return e;
 }
 
@@ -196,7 +312,7 @@ export function removeEntry(entryId) {
   e.deletedAt = Date.now();
   e.updatedAt = Date.now();
   e.dirty = true;
-  commit();
+  commit([e.ym]);
   return e;
 }
 
@@ -206,7 +322,7 @@ export function restoreEntry(entryId) {
   e.deletedAt = null;
   e.updatedAt = Date.now();
   e.dirty = true;
-  commit();
+  commit([e.ym]);
   return e;
 }
 
@@ -412,7 +528,7 @@ export function setTips(items) {
   // The month the advice was read from is kept with it, so the card can say what it
   // was looking at. Advice with no date on it is advice you cannot judge.
   state.tips = { items, ym: profile ? profile.ym : null, stamp: tipsStamp(profile), madeAt: Date.now() };
-  commit();
+  commit([]);
 }
 
 /**
@@ -465,7 +581,7 @@ export function settings() {
 
 export function setSetting(key, value) {
   state.settings[key] = value;
-  commit();
+  commit([]);
 }
 
 /**
@@ -522,11 +638,14 @@ export function pendingCount() {
  */
 export function applySync({ entries = [], months = [], cursor = null }) {
   const byId = new Map(state.entries.map((e) => [e.id, e]));
+  const touched = new Set();
 
   for (const incoming of entries) {
     const { seq, ...record } = incoming;
     const local = byId.get(record.id);
     if (local && (local.updatedAt || 0) > (record.updatedAt || 0)) continue;
+    if (local) touched.add(local.ym);
+    touched.add(record.ym);
     if (local) Object.assign(local, record, { dirty: false });
     else {
       const added = { ...record, dirty: false };
@@ -538,6 +657,7 @@ export function applySync({ entries = [], months = [], cursor = null }) {
   for (const incoming of months) {
     const local = state.months[incoming.ym];
     if (local && (local.updatedAt || 0) > (incoming.updatedAt || 0)) continue;
+    touched.add(incoming.ym);
     state.months[incoming.ym] = {
       opening: Number(incoming.opening) || 0,
       closedAt: incoming.closedAt ?? null,
@@ -548,7 +668,7 @@ export function applySync({ entries = [], months = [], cursor = null }) {
 
   if (cursor !== null) state.sync.cursor = cursor;
   state.sync.lastSyncedAt = Date.now();
-  commit();
+  commit([...touched]);
 }
 
 /**
@@ -560,7 +680,7 @@ export function applySync({ entries = [], months = [], cursor = null }) {
  */
 export function resetSyncCursor() {
   state.sync.cursor = 0;
-  commit();
+  commit([]);
 }
 
 /**
@@ -679,6 +799,111 @@ export function reviewText(ym) {
 
 export function setReviewText(ym, text) {
   state.reviews[ym] = { text, stamp: reviewStamp(monthReview(ym)), madeAt: Date.now() };
+  commit([]);
+}
+
+/* ----------------------------------------------------------------- budgets */
+
+/** The monthly budget for a spending category, or 0 for none. */
+export function budgetOf(categoryId) {
+  return Number(state.budgets?.[categoryId]) || 0;
+}
+
+/** Set a category's monthly budget. Zero, or nothing, removes it. */
+export function setBudget(categoryId, amount) {
+  const value = Math.round((Number(amount) || 0) * 100) / 100;
+  state.budgets = { ...(state.budgets || {}) };
+  if (value > 0) state.budgets[categoryId] = value;
+  else delete state.budgets[categoryId];
+  commit([]);
+}
+
+/**
+ * Where a category stands against its budget in a month: spent, what is left, and
+ * the share used. `adding` is an amount not yet saved - the add sheet's "after this".
+ * Null when the category has no budget.
+ */
+export function budgetStatus(categoryId, ym, adding = 0) {
+  const budget = budgetOf(categoryId);
+  if (!budget) return null;
+  let spent = 0;
+  for (const e of state.entries) {
+    if (e.ym === ym && !e.deletedAt && e.direction === 'out' && e.category === categoryId) spent += e.amount;
+  }
+  const after = spent + (Number(adding) || 0);
+  return { budget, spent, after, left: budget - spent, leftAfter: budget - after, used: spent / budget, usedAfter: after / budget };
+}
+
+/* --------------------------------------------------- entries with no account */
+
+/*
+ * Entries recorded on this phone that no account has ever confirmed - written while
+ * signed out, or by a previous person whose last changes never reached the server.
+ *
+ * Signing in used to decide their fate silently: merged into the account if this
+ * phone had never been signed in, deleted outright if it had been signed in as
+ * someone else. The second lost real data. Now the person signing in is asked, and
+ * these three functions are the store's half of that.
+ */
+
+/** How many unconfirmed entries there are, and what money they move. */
+export function unsyncedSummary() {
+  let count = 0;
+  let spent = 0;
+  let received = 0;
+  for (const e of state.entries) {
+    if (!e.dirty || e.deletedAt) continue;
+    count += 1;
+    if (e.direction === 'in') received += e.amount;
+    else spent += e.amount;
+  }
+  return { count, spent, received };
+}
+
+/**
+ * Keep only the unconfirmed entries, ready to go up into the account just signed in.
+ *
+ * Everything the server has already confirmed belonged to whoever was signed in
+ * before and is safe in their account, so it goes. Tombstones go too: a delete of a
+ * record this account never had means nothing to it.
+ *
+ * Opening money is kept but made to YIELD. Its timestamp is set to the start of
+ * time, so if the account already has an opening figure for that month the server's
+ * last-write-wins keeps the account's and sends it back down; if it has none, this
+ * one fills the gap. A week of signed-out use must not overwrite a figure set
+ * properly on another device.
+ */
+export function keepUnsyncedOnly({ months = true } = {}) {
+  state.entries = state.entries.filter((e) => e.dirty && !e.deletedAt);
+  const kept = {};
+  if (months) {
+    for (const [ym, m] of Object.entries(state.months)) {
+      if (m.dirty) kept[ym] = { ...m, updatedAt: 1 };
+    }
+  }
+  state.months = kept;
+  state.sync = { cursor: 0, lastSyncedAt: null };
+  commit();
+}
+
+/** The unconfirmed entries and months, copied, so a discard can be undone. */
+export function takeUnsynced() {
+  return {
+    entries: structuredClone(state.entries.filter((e) => e.dirty && !e.deletedAt)),
+    months: structuredClone(Object.fromEntries(Object.entries(state.months).filter(([, m]) => m.dirty)))
+  };
+}
+
+/** Put back what takeUnsynced() copied - the undo of a discard. Yields like above. */
+export function adoptUnsynced({ entries = [], months = {} }) {
+  const have = new Set(state.entries.map((e) => e.id));
+  const now = Date.now();
+  for (const e of entries) {
+    if (!have.has(e.id)) state.entries.push({ ...e, updatedAt: now, dirty: true });
+  }
+  for (const [ym, m] of Object.entries(months)) {
+    if (!state.months[ym]) state.months[ym] = { ...m, updatedAt: 1, dirty: true };
+  }
   commit();
 }
 
