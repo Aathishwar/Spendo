@@ -412,7 +412,40 @@ button { font: inherit; color: inherit; }
   color: var(--ink-3);
 }
 
-.donut-hint { color: var(--ink-3); }
+.donut-hint { color: var(--ink-3); text-align: center; }
+
+/* Spent or received, above the donut. Full card width, so it reads as the question
+   the chart below is answering rather than as a filter tucked in a corner. */
+.donut-seg { align-self: stretch; }
+.donut-seg .seg-btn { flex-wrap: wrap; column-gap: var(--space-2); row-gap: 0; }
+.seg-figure {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  opacity: 0.75;
+}
+.donut-none { text-align: center; color: var(--ink-3); }
+
+/* The centre is a button the size of the hole and no bigger, so it never takes a
+   tap meant for a slice. Its parent stays pointer-events: none for the same reason. */
+.donut-centre-btn {
+  pointer-events: auto;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.donut-centre-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: -4px; }
 
 .cat-row.is-dimmed { opacity: 0.5; }
 
@@ -1074,6 +1107,7 @@ button { font: inherit; color: inherit; }
   font-weight: var(--weight-medium);
   color: var(--ink-3);
 }
+.suggest[hidden] { display: none; }
 .suggest .chip-row { min-width: 0; }
 
 /*

@@ -18,6 +18,9 @@
  * electricity bill shared a row, and course fees had nowhere to go but Other. Ids of
  * the original nine are untouched, so entries already saved keep their category.
  *
+ * Debt is money received against a loan - borrowed, or a loan of yours being paid
+ * back. It sits before "Other income" for the same reason "other" is last below.
+ *
  * "other" stays LAST in the array. `category()` falls back to the last element, and
  * server/src/ai.js tells the model to answer with the last id in the list when
  * nothing fits - both read the tail, not the name.
@@ -43,6 +46,7 @@ export const INCOME_CATEGORIES = [
   { id: 'salary',    label: 'Salary',        icon: 'briefcase',       series: 3 },
   { id: 'refund',    label: 'Refund',        icon: 'arrow-counter-clockwise', series: 1 },
   { id: 'gift',      label: 'Gift',          icon: 'gift',            series: 5 },
+  { id: 'debt',      label: 'Debt',          icon: 'receipt',         series: 7 },
   { id: 'income',    label: 'Other income',  icon: 'coins',           series: 0 }
 ];
 

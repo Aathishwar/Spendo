@@ -275,10 +275,10 @@ export function withBalances(ym) {
 }
 
 /** Expense totals per category, largest first. Income is not a spending category. */
-export function categoryTotals(ym) {
+export function categoryTotals(ym, direction = 'out') {
   const totals = new Map();
   for (const e of entriesFor(ym)) {
-    if (e.direction !== 'out') continue;
+    if (e.direction !== direction) continue;
     totals.set(e.category, (totals.get(e.category) || 0) + e.amount);
   }
   const spent = [...totals.values()].reduce((a, b) => a + b, 0);
@@ -433,15 +433,28 @@ export function totalEntries() {
   return n;
 }
 
-/** Descriptions used before, most recent first, for the add sheet's suggestions. */
-export function recentDescriptions(limit = 8) {
-  const seen = [];
-  for (let i = state.entries.length - 1; i >= 0 && seen.length < limit; i--) {
+/**
+ * Every description ever used in one direction, once each, newest first.
+ *
+ * Per direction because "Salary" is no use as a suggestion under I paid, and
+ * "Parotta" is none under I received.
+ *
+ * The add sheet searches THIS as you type, not the handful of recent chips it shows
+ * before you start: something last bought in March is exactly the description worth
+ * offering back, and it is never among the last eight.
+ */
+export function descriptionHistory(direction = 'out') {
+  const seen = new Set();
+  const out = [];
+  for (let i = state.entries.length - 1; i >= 0; i--) {
     const e = state.entries[i];
-    if (e.deletedAt || !e.description) continue;
-    if (!seen.some((s) => s.toLowerCase() === e.description.toLowerCase())) seen.push(e.description);
+    if (e.deletedAt || !e.description || e.direction !== direction) continue;
+    const key = e.description.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e.description);
   }
-  return seen;
+  return out;
 }
 
 /* ---------------------------------------------------------------- settings */
