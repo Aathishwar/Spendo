@@ -204,7 +204,24 @@ async function postSync(body) {
  * more. Only one runs at a time; a second call while one is in flight joins it
  * rather than starting a race between two writers of the same store.
  */
+/*
+ * Paused while the person who just signed in decides what happens to entries this
+ * phone holds that no account has confirmed. Any sync in that window - the periodic
+ * one, a tab coming back, the pagehide beacon - would push those entries into the
+ * account before the question was answered, which is the decision made for them.
+ */
+let paused = false;
+
+export function pause(on) {
+  paused = Boolean(on);
+  if (paused) {
+    clearTimeout(debounceTimer);
+    clearTimeout(retryTimer);
+  }
+}
+
 export function syncNow(reason = 'manual') {
+  if (paused) return Promise.resolve({ skipped: 'paused' });
   if (inFlight) return inFlight;
   inFlight = run(reason).finally(() => { inFlight = null; });
   return inFlight;
@@ -302,7 +319,7 @@ export function syncSoon() {
   announce();                       // the pending count changed, show it now
   // Signed out, the dirty set is just a backlog waiting for a sign-in. Counting it
   // is useful; scheduling a request for it is not.
-  if (!isSignedIn()) return;
+  if (!isSignedIn() || paused) return;
   // Applying what the server sent is itself a write, so without this the store's
   // change notification would schedule a sync for the sync that just finished, and
   // the two would keep each other awake forever.
@@ -332,6 +349,7 @@ export function startSync() {
   // A last go while the tab is being closed. keepalive lets the request outlive the
   // page, which a normal fetch would not.
   window.addEventListener('pagehide', () => {
+    if (paused) return;
     const { entries, months } = sendableChanges();
     if (!entries.length && !months.length) return;
     if (!isSignedIn() || !navigator.onLine) return;

@@ -221,6 +221,8 @@ function render({ animate = false, from = null } = {}) {
     entries: store.withBalances(ym).reverse(),
     months: monthSummaries(),
     totals: store.categoryTotals(ym, sliceDir),
+    carry: tab === 'today' ? carryFrom(ym, stats) : null,
+    budgets: tab === 'insights' ? budgetsFor(ym) : null,
     otherTotals: store.categoryTotals(ym, sliceDir === 'out' ? 'in' : 'out'),
     sliceDir,
     theme: store.settings().theme,
@@ -414,7 +416,7 @@ function openAdd(direction = 'out') {
     categoryTouched: false,
     picked: null
   };
-  openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
+  openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction), budget: draftBudget() }));
 }
 
 /**
@@ -569,6 +571,7 @@ function applyGuess(categoryId, source, description) {
   // to the front of the row instead, which is where the sheet renders the chosen one
   // anyway, so a guess and a re-render agree about where it lives.
   if (selected) frontChip(selected);
+  paintBudgetHint();
 
   const note = form.querySelector('.field-label-row .field-hint');
   const text = { history: 'from your past entries', cache: 'from your past entries',
@@ -586,6 +589,26 @@ function applyGuess(categoryId, source, description) {
 }
 
 /** Reads the sheet's current inputs so a direction or category tap does not wipe them. */
+/**
+ * Where the draft's category stands against its budget, counting the amount typed.
+ * Spending only, and in the month of the draft's date - a backdated expense spends
+ * last month's budget, not this one's.
+ */
+function draftBudget(form = document.getElementById('add-form')) {
+  if (!draft || draft.direction !== 'out') return null;
+  const typed = form ? Number(form.elements.amount.value) : Number(draft.amount);
+  return store.budgetStatus(draft.category, ymOf(draft.date || todayISO()),
+    Number.isFinite(typed) && typed > 0 ? typed : 0);
+}
+
+/** Repaint the budget line in place - never the sheet, which would drop the keyboard. */
+function paintBudgetHint() {
+  const form = document.getElementById('add-form');
+  const slot = form && form.querySelector('[data-budget-hint]');
+  if (!slot) return;
+  slot.innerHTML = ui.budgetHint(draftBudget(form), category(draft.category).label);
+}
+
 function captureDraft() {
   const form = document.getElementById('add-form');
   if (!form) return;
@@ -614,7 +637,7 @@ function closeCalendar() {
   const from = picking && picking.from;
   picking = null;
   if (from === 'detail') reopenDetail();
-  else openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
+  else openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction), budget: draftBudget() }));
 }
 
 /* ------------------------------------------------------------ month review */
@@ -1178,6 +1201,24 @@ async function submitCode(email, code) {
 
   try {
     const out = await account.verifyCode(email, code);
+    const address = String(out.email || email).trim().toLowerCase();
+    const samePerson = Boolean(out.previousEmail) && out.previousEmail === address;
+
+    // Entries no account has confirmed are the person's to decide about, not ours -
+    // unless they are signing back in as the very person who wrote them.
+    if (!samePerson && store.unsyncedSummary().count > 0) {
+      sync.pause(true);
+      merge = {
+        email: address,
+        previousEmail: out.isNewPerson ? out.previousEmail : null,
+        // What the phone remembered before this sign-in, for a cancel to put back.
+        remembered: out.previousEmail || null
+      };
+      rememberMerge(merge);
+      signin = null;
+      openSheet(ui.mergeSheet({ ...merge, ...store.unsyncedSummary() }));
+      return;
+    }
 
     if (out.isNewPerson) store.clearLedger();
     // A device that has never seen this account has a cursor from nowhere, so the
@@ -1195,6 +1236,79 @@ async function submitCode(email, code) {
   } catch (err) {
     signin = { ...signin, busy: false, error: err.message };
     paintSignIn();
+  }
+}
+
+/* ------------------------------------------------- entries with no account */
+
+/*
+ * The question asked after signing in when the phone holds entries no account has
+ * confirmed (see mergeSheet in ui.js). Sync is paused until it is answered, and the
+ * question is written to localStorage, so closing the app half way through asks it
+ * again on the next launch rather than letting the first sync answer it.
+ *
+ * Closing the sheet without choosing cancels the sign-in: it is the one answer that
+ * changes nothing, which is what a dismissal should mean.
+ */
+let merge = null;     // { email, previousEmail } while the question is open
+const MERGE_KEY = 'spendo.mergePending';
+
+function rememberMerge(value) {
+  try {
+    if (value) localStorage.setItem(MERGE_KEY, JSON.stringify(value));
+    else localStorage.removeItem(MERGE_KEY);
+  } catch { /* storage refused: the question just is not asked again after a restart */ }
+}
+
+function pendingMerge() {
+  try {
+    const v = JSON.parse(localStorage.getItem(MERGE_KEY) || 'null');
+    return v && typeof v.email === 'string' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function settleMerge(choice) {
+  const was = merge || pendingMerge();
+  merge = null;
+  rememberMerge(null);
+  if (!was) return;
+
+  let snack = `Signed in as ${was.email}. Adding them to your account.`;
+  let undo = null;
+  if (choice === 'keep') {
+    // Somebody else's opening money is not this account's business; one's own is.
+    store.keepUnsyncedOnly({ months: !was.previousEmail });
+  } else {
+    const saved = store.takeUnsynced();
+    store.clearLedger();
+    snack = `Discarded ${plural(saved.entries.length, 'entry', 'entries')}. Loading ${was.email}.`;
+    undo = () => {
+      store.adoptUnsynced(saved);
+      render();
+      showSnack(`Put back ${plural(saved.entries.length, 'entry', 'entries')}. Adding them to your account.`, null, null, 'cloud-check');
+      sync.syncSoon();
+    };
+  }
+  closeSheet();
+  render();
+  showSnack(snack, undo ? 'Undo' : null, undo, 'cloud-check');
+  sync.pause(false);
+  sync.signedIn();
+}
+
+async function cancelMerge() {
+  const was = merge;
+  merge = null;
+  rememberMerge(null);
+  try {
+    if (was) account.restoreLastEmail(was.remembered);
+    await account.signOut();
+  } finally {
+    sync.pause(false);
+    render();
+    showSnack('Sign-in cancelled. Nothing on this phone was changed.', null, null, 'sign-out');
   }
 }
 
@@ -1906,6 +2020,61 @@ function paintList() {
   if (foot) foot.innerHTML = ui.ledgerFoot(result.entries);
 }
 
+/* ----------------------------------------------------------------- budgets */
+
+/** Every spending category's standing against its budget in a month, by id. */
+function budgetsFor(month) {
+  const out = {};
+  for (const c of categoriesFor('out')) {
+    const s = store.budgetStatus(c.id, month);
+    if (s) out[c.id] = s;
+  }
+  return out;
+}
+
+function openBudget(categoryId) {
+  const label = category(categoryId).label;
+  const current = store.budgetOf(categoryId);
+  openSheet(ui.amountSheet({
+    title: `${label} budget`,
+    note: `How much you mean to spend on ${label.toLowerCase()} in a month. It applies to every month; set 0 to remove it.`,
+    label: 'Each month',
+    confirm: current ? 'Change budget' : 'Set budget'
+  }));
+  const form = document.getElementById('amount-form');
+  form.dataset.mode = 'budget';
+  form.dataset.category = categoryId;
+  if (current) form.elements.amount.value = String(current);
+}
+
+/* -------------------------------------------------------------- carry over */
+
+/**
+ * What a new month could start with: the previous month's balance, if it had any
+ * activity and ended above zero. Null when there is nothing honest to offer - a
+ * month already begun, a previous month that was empty, or one that ended in debt.
+ */
+function carryFrom(month, stats) {
+  if (stats.opening !== 0 || stats.count !== 0) return null;
+  const from = shiftYM(month, -1);
+  const before = store.monthStats(from);
+  if (before.count === 0 && before.opening === 0) return null;
+  const amount = Math.round(before.balance * 100) / 100;
+  return amount > 0 ? { from, amount } : null;
+}
+
+function carryOver() {
+  const offer = carryFrom(ym, store.monthStats(ym));
+  if (!offer) return;
+  const month = ym;
+  store.setOpening(month, offer.amount);
+  render({ animate: true });
+  showSnack(`${monthLabel(month)} starts with ${money(offer.amount)} from ${monthLabel(offer.from)}.`, 'Undo', () => {
+    store.setOpening(month, 0);
+    render();
+  }, 'wallet');
+}
+
 /* ---------------------------------------------------------------- one day */
 
 /** The month's entries, narrowed to the picked day when there is one. */
@@ -2229,7 +2398,7 @@ document.addEventListener('click', (e) => {
     draft.picked = null;
     captureDraft();
     draft.category = el.dataset.category;
-    openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
+    openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction), budget: draftBudget() }));
     return;
   }
 
@@ -2307,7 +2476,7 @@ document.addEventListener('click', (e) => {
     } else {
       captureDraft();
       draft.date = iso;
-      openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
+      openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction), budget: draftBudget() }));
     }
     return;
   }
@@ -2465,6 +2634,8 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'sign-in': openSignIn(); break;
+    case 'merge-keep': settleMerge('keep'); break;
+    case 'merge-discard': settleMerge('discard'); break;
     case 'sign-out': doSignOut(); break;
     case 'sign-out-all': askSignOutEverywhere(); break;
     case 'confirm-sign-out-all': doSignOutEverywhere(); break;
@@ -2483,6 +2654,9 @@ document.addEventListener('click', (e) => {
       if (pendingUndo) pendingUndo();
       hideSnack();
       break;
+
+    case 'carry-over': carryOver(); break;
+    case 'set-budget': openBudget(el.dataset.budgetCat); break;
 
     case 'set-opening':
       openSheet(ui.amountSheet({
@@ -2521,6 +2695,7 @@ document.addEventListener('input', (e) => {
   // named for its row, and a check on the name alone let junk through in every
   // one of them.
   if (el.classList.contains('input-amount')) filterAmountInput(el);
+  if (el.name === 'amount' && el.form && el.form.id === 'add-form') paintBudgetHint();
 
   if (el.name === 'description' && el.form) {
     filterSuggestions(el.form);
@@ -2656,6 +2831,16 @@ document.addEventListener('submit', (e) => {
       slot.hidden = false;
       return;
     }
+    if (form.dataset.mode === 'budget') {
+      const id = form.dataset.category;
+      store.setBudget(id, amount);
+      closeSheet();
+      render();
+      showSnack(amount > 0
+        ? `${category(id).label} budget set to ${money(amount)} a month.`
+        : `${category(id).label} budget removed.`, null, null, 'check-bold');
+      return;
+    }
     if (form.dataset.mode === 'add') store.addOpening(ym, amount);
     else store.setOpening(ym, amount);
     closeSheet();
@@ -2689,6 +2874,8 @@ sheet.addEventListener('close', () => {
  */
 function letGoOfSheet() {
   signin = null;
+  // Dismissed without an answer. The answers clear `merge` before they close.
+  if (merge) cancelMerge();
   reviewYM = null;
   /*
    * Dropped BEFORE the recogniser is stopped, not after.
@@ -2775,6 +2962,16 @@ account.onAccountChange(() => {
  * whole point of caching it.
  */
 account.refresh().then(() => {
+  // A sign-in left half way through its question - the app closed on the sheet.
+  // Ask again, still paused, rather than let the first sync answer it.
+  const asked = pendingMerge();
+  if (asked && account.isSignedIn() && store.unsyncedSummary().count > 0) {
+    sync.pause(true);
+    merge = asked;
+    openSheet(ui.mergeSheet({ ...asked, ...store.unsyncedSummary() }));
+  } else if (asked) {
+    rememberMerge(null);
+  }
   sync.startSync();
   maybeNudgeSignIn();
 });

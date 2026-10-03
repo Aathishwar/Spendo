@@ -1129,6 +1129,77 @@ the suite passes under `TZ=America/Los_Angeles` and `TZ=Pacific/Kiritimati`. The
 parser's "yesterday" also read the clock instead of the date it was given, which is why
 two of its tests passed in September and failed every day after.
 
+## Entries with no account, saving by month, and a month that has just started (2026-10-03)
+
+**Signing in asks before it touches local entries.** It used to decide on its own: a phone
+never signed in had its signed-out entries merged into the account without a word, and a
+phone last signed in as somebody else had its ledger deleted - including that person's
+entries that had never reached the server, which was silent data loss. Now, when the phone
+holds entries no account has confirmed (`dirty` and not deleted) and the person signing in
+is not the one who wrote them, `submitCode` pauses sync (`sync.pause`) and opens
+`ui.mergeSheet`: **Add them**, **Discard them**, or cancel. Rules worth keeping:
+
+- **The question survives the app closing.** It is written to `spendo.mergePending`, and
+  boot asks again, still paused, rather than letting the first sync answer it.
+- **Dismissing cancels the sign-in** - signs out, changes nothing, and puts back the
+  remembered address (`account.restoreLastEmail`), or the next prompt would name the
+  wrong person as the owner.
+- **Opening money from the phone yields.** `keepUnsyncedOnly` sets its timestamp to 1,
+  so last-write-wins keeps the account's figure where it has one and fills the gap where
+  it does not. Somebody else's opening money is not carried at all.
+- **Discard is undoable for the snackbar's six seconds** (`takeUnsynced` / `adoptUnsynced`).
+- Duplicates are NOT detected: the same week typed on two devices arrives twice.
+
+**The ledger is stored month by month.** `spendo.v1` now holds only settings, the sync
+cursor and write-ups, plus `monthKeys`; each month is `spendo.v1.m.<ym>`. `commit(scope)`
+names the months a change touched; with no scope it writes every month, so a write path
+that forgets is slow rather than lossy. Measured with 20,000 entries over 60 months: a
+save went from 16.5ms to 1.9ms. The old single-value format is read as-is and written out
+on the first save. Two things the tests in `server/test/store.test.js` exist for:
+- `migrated` was first declared AFTER `let state = load()`. Assigning it inside load()
+  threw, the catch returned an empty ledger, and the next save would have written that
+  over the real one. Module-level state that load() touches is declared above it.
+- Storage that cannot be read sets `unreadable`, and nothing is saved for the rest of
+  that session. An empty ledger written over data this build could not parse is
+  unrecoverable; refusing to save loses at most one session's changes.
+
+**A new month offers last month's balance.** When the month on screen has no opening
+money and no entries, and the previous month had activity and ended above zero, Home
+offers "Carry over ₹X" with "Set a different amount" beside it. Offered, never applied on
+its own - money moved out between months is what an automatic carry-over gets wrong.
+
+## Category budgets (2026-10-03)
+
+A monthly budget per spending category, shown in two places only, at the owner's choice:
+**Insights** and **the add sheet**. Not on Home - a budgets card there was mocked up and
+declined.
+
+- **Set** from Insights: open a category row, "Set a budget" / "Change". It reuses the
+  amount sheet (`mode = 'budget'`); 0 removes it. One figure per category, applying to
+  every month.
+- **Insights rows** with a budget swap the share bar for a meter against the budget, with
+  "₹X left" or "₹X over" in place of the percentage. Rows without one are unchanged, and
+  the Received side never shows budgets.
+- **The add sheet** shows "Food: ₹2,700 left of ₹6,000 this month · after this, ₹2,250
+  left" under the category chips, for spending in a category with a budget, measured in
+  the month of the entry's date. It is repainted in place (`paintBudgetHint`) on every
+  amount keystroke and on a guessed category - never by re-rendering the sheet, which
+  would drop the keyboard.
+- Meter colour: ink, then `--warn` from 85%, then `--spend` over 100%. The words always
+  carry the same fact, so colour is never the only channel.
+- **Budgets live on this phone only**, in `state.budgets` beside the settings. The server
+  has no table for them, so they do not sync and a second device starts without them.
+  Syncing them needs a `budgets` table, a migration, and a third kind of record in
+  `/api/sync`.
+
+## Later, by the owner's choice
+
+- **Compare with last month (suggestion 8).** Three designs were mocked up and parked, not
+  rejected: (A) an up/down change chip on each Insights category row, (B) a "vs September"
+  card at the top of Insights comparing the same number of days, (C) last month's amount
+  as a tick on each category bar, with "↑7% vs Sep" in the donut centre. Ask which before
+  building.
+
 ## Installing
 
 **`manifest.webmanifest` declares `"id": "spendo"`, and that string must never change.**

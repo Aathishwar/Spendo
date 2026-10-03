@@ -1349,6 +1349,66 @@ button { font: inherit; color: inherit; }
 }
 .confirm-actions .btn { flex: none; }
 
+/* Budgets: the meter on an Insights row and under the add sheet's categories. */
+.budget-meter {
+  display: block;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.budget-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+  transition: width var(--dur-state) var(--ease);
+}
+.budget-meter.is-near .budget-meter-fill { background: var(--warn); }
+.budget-meter.is-over .budget-meter-fill { background: var(--spend); }
+.budget-row-note,
+.budget-hint-text {
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+.budget-row-note { margin-top: 2px; }
+.budget-hint:empty { display: none; }
+.budget-hint { margin-top: var(--space-3); }
+.budget-hint-text b { color: var(--ink); font-weight: var(--weight-semibold); }
+.is-over, .budget-hint-text b.is-over { color: var(--spend); }
+.budget-set {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+.budget-set b { color: var(--ink); }
+
+.empty-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.merge-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.merge-actions .btn { justify-content: center; gap: var(--space-2); }
+.merge-actions .btn-block { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.merge-note {
+  margin-top: var(--space-3);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
 /* ---------------------------------------------------------- detail sheet */
 
 .field-rows {
