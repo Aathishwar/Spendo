@@ -72,10 +72,7 @@ export function longDate(iso) {
 export function friendlyDate(iso) {
   const today = todayISO();
   if (iso === today) return 'Today';
-  const d = new Date(today);
-  d.setDate(d.getDate() - 1);
-  const yesterday = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  if (iso === yesterday) return 'Yesterday';
+  if (iso === yesterdayISO(today)) return 'Yesterday';
   return longDate(iso);
 }
 
@@ -103,11 +100,23 @@ export function signedMoney(n, direction) {
   return `${direction === 'in' ? '+' : '-'}${money(Math.abs(Number(n) || 0))}`;
 }
 
-/** Yesterday in the device's own timezone. */
-export function yesterdayISO() {
-  const d = new Date(todayISO());
-  d.setDate(d.getDate() - 1);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/**
+ * A YYYY-MM-DD date moved by whole days, as calendar arithmetic and nothing else.
+ *
+ * `new Date('2026-10-03')` is UTC midnight, and reading it back with getDate() is
+ * local time - so anywhere west of Greenwich it is still the 2nd, and "yesterday"
+ * came out two days back. Done entirely in UTC here, both ways, no timezone can move
+ * it.
+ */
+export function shiftDay(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + days));
+  return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
+}
+
+/** The day before `iso`, or before today on this device when none is given. */
+export function yesterdayISO(iso = todayISO()) {
+  return shiftDay(iso, -1);
 }
 
 /** Weekday index of the first of a month, 0 = Sunday. */

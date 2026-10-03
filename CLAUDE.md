@@ -1115,6 +1115,20 @@ Four things worth knowing before touching it:
   `render()` decides that with `lastPaint`; the keys on `data-roll` carry no month, so the
   guard is what stops September's balance counting into August's.
 
+**The status bar is not part of the page, so a reveal cannot sweep it.** It is painted
+from `<meta name="theme-color">`, which can only be switched, not animated. Switching it
+inside the theme change made the bar flip on the tap while the circle was still a dot
+around the button. `revealTheme()` takes an `atTop` callback and fires it when the
+circle's edge reaches y = 0 - the radius as a fraction of the final radius, mapped back
+through the easing curve to a time - so the bar changes as the circle arrives at it.
+
+**`yesterdayISO()` parsed YYYY-MM-DD as UTC and read it back in local time.** West of
+Greenwich that made yesterday two days back. It is `shiftDay()` in format.js now, UTC
+both ways, and `server/test/format.test.js` covers the month, year and leap boundaries;
+the suite passes under `TZ=America/Los_Angeles` and `TZ=Pacific/Kiritimati`. The bulk
+parser's "yesterday" also read the clock instead of the date it was given, which is why
+two of its tests passed in September and failed every day after.
+
 ## Installing
 
 **`manifest.webmanifest` declares `"id": "spendo"`, and that string must never change.**

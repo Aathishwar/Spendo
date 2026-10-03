@@ -58,10 +58,14 @@ const INCOME = /\b(got|receiv\w*|credit\w*|salary|stipend|refund\w*|income|earn\
  * Only the two that come up in speech. Anything more - "last Tuesday", "on the
  * 14th" - is a date grammar, and the search field already has one of those; putting
  * a second, different one here would be two answers to the same question.
+ *
+ * Both are relative to the date the parser was given, not to the clock: `date` is
+ * the caller's "today", and the tests pin it. Reading the clock here made two tests
+ * pass in September and fail every day after it.
  */
 const WHEN = [
-  [/\byesterday\b/i, () => yesterdayISO()],
-  [/\btoday\b/i, () => todayISO()]
+  [/\byesterday\b/i, (today) => yesterdayISO(today)],
+  [/\btoday\b/i, (today) => today]
 ];
 
 /*
@@ -117,7 +121,7 @@ function readSegment(raw, fallbackDate) {
 
   for (const [pattern, resolve] of WHEN) {
     if (pattern.test(rest)) {
-      date = resolve();
+      date = resolve(fallbackDate);
       rest = rest.replace(pattern, ' ');
     }
   }

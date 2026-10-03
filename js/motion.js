@@ -376,11 +376,19 @@ function count(el, from, to, write, duration) {
  *
  * Without the API (Firefox, older Safari) or under reduced motion, the change just
  * happens. `change` runs exactly once either way.
+ *
+ * `atTop` is for the one thing outside the page: the phone's status bar, painted
+ * from <meta name="theme-color">. It cannot be animated, only switched, so it is
+ * switched when the circle reaches the top edge of the screen - the moment the bar
+ * would be next to change if it were part of the page. It runs exactly once.
  */
-export function revealTheme(change, origin) {
+const REVEAL_EASE = [0.65, 0, 0.35, 1];
+
+export function revealTheme(change, origin, atTop = null) {
   const duration = durationOf('--dur-reveal') || durationOf('--dur-sheet');
   if (typeof document.startViewTransition !== 'function' || !duration) {
     change();
+    if (atTop) atTop();
     return;
   }
 
@@ -393,20 +401,48 @@ export function revealTheme(change, origin) {
   root.classList.add('is-theme-reveal');
   const done = () => root.classList.remove('is-theme-reveal');
 
+  let barDone = !atTop;
+  const bar = () => {
+    if (barDone) return;
+    barDone = true;
+    atTop();
+  };
+
   const t = document.startViewTransition(change);
   t.ready.then(() => {
     root.animate(
       { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
       {
         duration,
-        // Fast out of the button, slowing as it reaches the edges: most of the page
-        // has turned by the half-way point and the last corners settle.
-        easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
+        // Slow out of the button, fast across the middle, settling at the corners.
+        easing: `cubic-bezier(${REVEAL_EASE.join(', ')})`,
         pseudoElement: '::view-transition-new(root)'
       }
     );
-  }).catch(() => {});
-  t.finished.then(done, done);
+    // The circle's edge reaches y = 0 when its radius equals y. That is a fraction of
+    // the final radius, which the easing maps back to a fraction of the time.
+    if (atTop) setTimeout(bar, duration * timeForProgress(y / radius, REVEAL_EASE));
+  }).catch(bar);
+  // Whatever happened to the animation, the bar ends on the right colour.
+  t.finished.then(() => { done(); bar(); }, () => { done(); bar(); });
+}
+
+/**
+ * The point in time (0-1) at which a cubic-bezier easing reaches `progress` (0-1).
+ * Bisection over the curve's parameter: the curve is monotonic in x for any
+ * easing a stylesheet would accept, and twenty halvings is far below a frame.
+ */
+function timeForProgress(progress, [x1, y1, x2, y2]) {
+  const p = Math.min(1, Math.max(0, progress));
+  const bez = (a, b, s) => 3 * a * s * (1 - s) ** 2 + 3 * b * s * s * (1 - s) + s ** 3;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 20; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (bez(y1, y2, mid) < p) lo = mid;
+    else hi = mid;
+  }
+  return bez(x1, x2, (lo + hi) / 2);
 }
 
 /* ------------------------------------------------------------ donut swap */
