@@ -21,7 +21,7 @@ import { guess, remember } from './categorise.js';
 import { parseSpoken } from './bulk.js';
 import { listen, speechSupported } from './voice.js';
 import { workbook } from './xlsx.js';
-import { capture, crossfade, durationOf, enter, glide, playChanges } from './motion.js';
+import { capture, crossfade, durationOf, enter, glide, narrowTo, playChanges } from './motion.js';
 
 const view = document.getElementById('view');
 const fab = document.getElementById('fab');
@@ -49,6 +49,8 @@ let search = { open: false, query: '' };
 let order = 'date';
 let sliceId = null;   // the category chosen on Insights, or null
 let sliceDir = 'out'; // which side Insights is dividing up: 'out' spent, 'in' received
+let day = null;       // Home: the day picked on the daily chart, as YYYY-MM-DD, or null
+let dailyChart = null; // the daily chart's pin, so the list can clear it too
 // The calendar is a mode of whichever sheet is open, not a sheet of its own, so it
 // knows which one to hand the date back to.
 let picking = null;   // { from: 'add' | 'detail', viewYM }
@@ -228,7 +230,13 @@ function render({ animate = false, from = null } = {}) {
   };
   // Ordered here and not in ctx.entries: Insights lists a category's entries from
   // that array too, and a sort chosen on Home should not reach into another screen.
-  ctx.searchResult = runSearch(inOrder(ctx.entries), search.query);
+  // A picked day belongs to the month it was picked in. Any of the several routes
+  // that change the month leaves it behind rather than filtering a month to a date
+  // it does not contain.
+  if (day && ymOf(day) !== ym) day = null;
+  ctx.day = day ? dayInfo(ctx.entries) : null;
+  ctx.listWhere = listWhere();
+  ctx.searchResult = runSearch(inOrder(onDay(ctx.entries)), search.query);
 
   // Whatever was parked open belongs to the DOM that is about to be replaced.
   openTrack = null;
@@ -1337,13 +1345,19 @@ function bindChart() {
   for (const off of chartDismissers) document.removeEventListener('pointerdown', off);
   chartDismissers = [];
 
+  dailyChart = null;
   const daily = view.querySelector('[data-chart="daily"]');
   if (daily) {
     const stats = store.monthStats(ym);
-    bindPinnableChart(daily, stats.daysInMonth, (day) => {
-      const value = stats.perDay[day - 1] || 0;
-      const iso = `${ym}-${String(day).padStart(2, '0')}`;
-      return { title: longDate(iso), value: value > 0 ? money(value) : 'nothing spent' };
+    const isoOf = (n) => `${ym}-${String(n).padStart(2, '0')}`;
+    // The daily chart's pin is also the list's filter, so it is sticky: a tap
+    // elsewhere on the page - on a row of that very day, say - must not undo it.
+    dailyChart = bindPinnableChart(daily, stats.daysInMonth, (n) => {
+      const value = stats.perDay[n - 1] || 0;
+      return { title: longDate(isoOf(n)), value: value > 0 ? money(value) : 'nothing spent' };
+    }, {
+      pinned: day ? Number(day.slice(8, 10)) : null,
+      onPick: (n) => pickDay(n === null ? null : isoOf(n))
     });
   }
 
@@ -1379,10 +1393,10 @@ function bindChart() {
  * and a figure that outlives the thing it was read from is worse than one that has to
  * be tapped again.
  */
-function bindPinnableChart(wrap, columns, readout) {
+function bindPinnableChart(wrap, columns, readout, { pinned: initial = null, onPick = null } = {}) {
   const tip = wrap.querySelector('.chart-tip');
   const svg = wrap.querySelector('svg');
-  if (!tip || !svg || columns < 1) return;
+  if (!tip || !svg || columns < 1) return null;
 
   // A device with a real pointer. Not `hover: hover` alone: a stylus and some
   // Android browsers report hover while still delivering touch-shaped events.
@@ -1431,9 +1445,12 @@ function bindPinnableChart(wrap, columns, readout) {
     const hit = e.target.closest('.chart-hit');
     if (!hit) return;
     const n = Number(hit.dataset.day);
-    if (pinned === n) return clear();
-    pinned = n;
-    show(n);
+    if (pinned === n) clear();
+    else {
+      pinned = n;
+      show(n);
+    }
+    if (onPick) onPick(pinned);
   });
 
   if (fine) {
@@ -1445,9 +1462,19 @@ function bindPinnableChart(wrap, columns, readout) {
     wrap.addEventListener('pointerleave', () => { if (pinned === null) tip.hidden = true; });
   }
 
-  const dismiss = (e) => { if (pinned !== null && !wrap.contains(e.target)) clear(); };
-  document.addEventListener('pointerdown', dismiss);
-  chartDismissers.push(dismiss);
+  if (initial !== null) {
+    pinned = initial;
+    show(initial);
+  }
+
+  // A chart whose pin drives something else keeps it until it is undone on purpose.
+  if (!onPick) {
+    const dismiss = (e) => { if (pinned !== null && !wrap.contains(e.target)) clear(); };
+    document.addEventListener('pointerdown', dismiss);
+    chartDismissers.push(dismiss);
+  }
+
+  return { clear };
 }
 
 /* ------------------------------------------------------------------ delete */
@@ -1763,138 +1790,18 @@ function removeRow(track, id) {
 /* ------------------------------------------------------------------ search */
 
 /**
- * The operators the Telegram bot understood, minus the date ones, which arrive with
- * the rest of search in phase 5. Anything that is not an operator is a keyword and
+ * Keywords and the amount operators the Telegram bot understood. The date operators
+ * (`d:21`, `m:2025-05` and the rest) were built and then taken out at the owner's
+ * request: a day is picked by tapping its bar in the daily chart, which needs no
+ * syntax remembered. See `pickDay`. Anything that is not an operator is a keyword and
  * all keywords must match, which is how the old `/search coffee zomato` behaved.
  */
-/*
- * The date half of the query language, which the Telegram bot had and this did not.
- *
- * Every form is written the way the date is written everywhere else in this app -
- * day first - because a search box that wants ISO while the screen shows 21-06-2025
- * is a box people stop typing dates into.
- *
- *   d:21                  the 21st of the month on screen
- *   21-06-2025            one day
- *   21-06-2025..25-06     a range; the second date may leave off what it shares
- *   m:2025-05             a whole month
- *   today, yesterday      the two that get typed most
- *
- * Parsing returns a plain { from, to } of YYYY-MM-DD strings, inclusive at both
- * ends, and matching is a pair of string comparisons - which is exact, because the
- * dates are stored as those same strings and never as a Date. A Date here would
- * introduce the one bug this app has been careful to avoid everywhere else: an
- * expense on the 1st landing on the 31st because a timezone moved it backwards.
- */
-const DMY = /^(\d{1,2})-(\d{1,2})-(\d{4})$/;
-const DM = /^(\d{1,2})-(\d{1,2})$/;
-
-const pad = (n) => String(n).padStart(2, '0');
-
-/** "21-06-2025" to "2025-06-21", or null. The year may be borrowed from a partner. */
-function dmyToISO(text, fallbackYear) {
-  let m = text.match(DMY);
-  if (m) return `${m[3]}-${pad(m[2])}-${pad(m[1])}`;
-  m = text.match(DM);
-  if (m && fallbackYear) return `${fallbackYear}-${pad(m[2])}-${pad(m[1])}`;
-  return null;
-}
-
-const lastDayOf = (ymText) => {
-  const [y, mo] = ymText.split('-').map(Number);
-  return `${ymText}-${pad(new Date(Date.UTC(y, mo, 0)).getUTCDate())}`;
-};
-
-/**
- * One token to a date range, or null if it is not a date at all.
- *
- * `viewYM` is the month on screen, which is what makes `d:21` mean anything: the
- * bare day belongs to the month being looked at, not to the current one.
- */
-function dateToken(token, viewYM) {
-  let m;
-
-  if (token === 'today') {
-    const t = todayISO();
-    return { from: t, to: t };
-  }
-  if (token === 'yesterday') {
-    const y = yesterdayISO();
-    return { from: y, to: y };
-  }
-
-  // d:21 - a day of the month on screen
-  if ((m = token.match(/^d:(\d{1,2})$/))) {
-    const day = Number(m[1]);
-    if (day < 1 || day > 31) return null;
-    /*
-     * A day that month does not have is answered, not silently searched for. `d:31`
-     * in September used to report "no transaction matches in 31 September 2026",
-     * which names a date that does not exist and reads as though the app had looked
-     * and found nothing. The range is impossible on purpose - nothing can match - and
-     * the note says why.
-     */
-    if (day > daysInMonth(viewYM)) {
-      return { from: '9999-12-31', to: '0000-01-01', invalid: `${monthLabel(viewYM)} has no ${ordinal(day)}` };
-    }
-    const iso = `${viewYM}-${pad(day)}`;
-    return { from: iso, to: iso };
-  }
-
-  // m:2025-05 - a whole month
-  if ((m = token.match(/^m:(\d{4})-(\d{1,2})$/))) {
-    const monthText = `${m[1]}-${pad(m[2])}`;
-    return { from: `${monthText}-01`, to: lastDayOf(monthText) };
-  }
-
-  // 21-06-2025..25-06-2025, and the shorthand that drops the repeated year
-  if (token.includes('..')) {
-    const [rawFrom, rawTo] = token.split('..');
-    const from = dmyToISO(rawFrom);
-    if (!from) return null;
-    const to = dmyToISO(rawTo, from.slice(0, 4));
-    if (!to) return null;
-    // Typed backwards is a typo, not an empty result.
-    return from <= to ? { from, to } : { from: to, to: from };
-  }
-
-  const single = dmyToISO(token);
-  if (single) return { from: single, to: single };
-
-  return null;
-}
-
-/** 21st, 22nd, 23rd, 24th. Used only to say a day back to the reader. */
-function ordinal(n) {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 13) return `${n}th`;
-  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
-}
-
-/** Two ranges narrow to their overlap, so two date terms mean "both", like keywords. */
-function narrow(current, next) {
-  if (!current) return next;
-  if (current.invalid) return current;
-  if (next.invalid) return next;
-  return {
-    from: current.from > next.from ? current.from : next.from,
-    to: current.to < next.to ? current.to : next.to
-  };
-}
-
-function parseQuery(query, viewYM = ym) {
+function parseQuery(query) {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const f = { keywords: [], min: null, max: null, exact: null, date: null };
+  const f = { keywords: [], min: null, max: null, exact: null };
 
   for (const t of tokens) {
     let m;
-
-    const range = dateToken(t, viewYM);
-    if (range) {
-      f.date = narrow(f.date, range);
-      continue;
-    }
-
     if ((m = t.match(/^(>=|<=|>|<)(\d+(?:\.\d{1,2})?)$/))) {
       const v = parseFloat(m[2]);
       if (m[1] === '>') f.min = v + 0.01;
@@ -1913,31 +1820,7 @@ function parseQuery(query, viewYM = ym) {
   return f;
 }
 
-/** "21 June", or "21-25 June", or "June 2025". What the note says back. */
-function describeRange({ from, to, invalid }) {
-  if (invalid) return invalid;
-  const day = (iso) => Number(iso.slice(8, 10));
-  const monthOf = (iso) => monthLabel(iso.slice(0, 7));
-
-  if (from === to) return `${day(from)} ${monthOf(from)}`;
-
-  const wholeMonth = from.slice(0, 7) === to.slice(0, 7)
-    && day(from) === 1
-    && to === lastDayOf(from.slice(0, 7));
-  if (wholeMonth) return monthOf(from);
-
-  if (from.slice(0, 7) === to.slice(0, 7)) {
-    return `${day(from)}-${day(to)} ${monthOf(from)}`;
-  }
-  return `${day(from)} ${monthOf(from)} to ${day(to)} ${monthOf(to)}`;
-}
-
 function matches(e, f) {
-  // Dates are compared as the strings they are stored as. YYYY-MM-DD sorts
-  // lexicographically in date order, which is the whole reason the app writes them
-  // that way, so this needs no parsing and cannot be moved by a timezone.
-  if (f.date && (e.date < f.date.from || e.date > f.date.to)) return false;
-
   const hay = `${e.description} ${category(e.category).label}`.toLowerCase();
   if (!f.keywords.every((k) => hay.includes(k))) return false;
   if (f.exact !== null && e.amount !== f.exact) return false;
@@ -1962,19 +1845,14 @@ function runSearch(entries, query) {
   if (!found.length) {
     for (const m of store.months()) {
       if (m === ym) continue;
-      elsewhere += store.entriesFor(m).filter((e) => matches(e, parseQuery(query, m))).length;
+      elsewhere += store.entriesFor(m).filter((e) => matches(e, f)).length;
     }
   }
   return {
     query,
     entries: found,
     spent: found.reduce((a, e) => a + (e.direction === 'out' ? e.amount : 0), 0),
-    elsewhere,
-    // Said back in words by the note under the field. A date term that parsed into
-    // something other than what was meant is otherwise indistinguishable from a
-    // month with nothing in it.
-    dateLabel: f.date ? describeRange(f.date) : '',
-    dateImpossible: Boolean(f.date && f.date.invalid)
+    elsewhere
   };
 }
 
@@ -2007,21 +1885,91 @@ function paintList() {
   if (!rows) return;
   // The row parked open belongs to the nodes about to be replaced.
   openTrack = null;
-  const entries = inOrder(store.withBalances(ym).reverse());
-  const result = runSearch(entries, search.query);
+  const all = store.withBalances(ym).reverse();
+  const result = runSearch(inOrder(onDay(all)), search.query);
   rows.innerHTML = ui.txnRows(result.entries);
-  if (note) note.innerHTML = ui.searchNote(result, monthLabel(ym));
+  if (note) note.innerHTML = ui.searchNote(result, listWhere());
+  const banner = document.getElementById('day-filter');
+  if (banner) banner.innerHTML = ui.dayBanner(day ? dayInfo(all) : null);
   // The total is of what is listed, so it has to move with the list on every
   // keystroke. Leaving it behind would show a month's total under a filtered list.
   if (foot) foot.innerHTML = ui.ledgerFoot(result.entries);
 }
 
+/* ---------------------------------------------------------------- one day */
+
+/** The month's entries, narrowed to the picked day when there is one. */
+function onDay(entries) {
+  return day ? entries.filter((e) => e.date === day) : entries;
+}
+
+/** Where the list is looking, in words, for the search note. */
+function listWhere() {
+  return day ? longDate(day) : monthLabel(ym);
+}
+
+/** What the banner over a one-day list says: the day, and what moved on it. */
+function dayInfo(entries) {
+  let spent = 0;
+  let received = 0;
+  let count = 0;
+  for (const e of entries) {
+    if (e.date !== day) continue;
+    count += 1;
+    if (e.direction === 'in') received += e.amount;
+    else spent += e.amount;
+  }
+  return { iso: day, spent, received, count };
+}
+
+/**
+ * A bar on the daily chart, tapped: the list below becomes that day's list.
+ *
+ * This replaced the date half of the search grammar. `d:21` had to be known to be
+ * used; a bar is already on screen and already says which day it is.
+ *
+ * The rows are not re-rendered with the screen. Rows leaving fade out first, then the
+ * survivors glide up into their new places and any that were not there before rise
+ * in - so the reader sees the list narrow to the day rather than being swapped for a
+ * different list. The totals under it count to their new values the same way.
+ */
+function pickDay(next) {
+  day = next;
+  const rows = document.getElementById('txn-rows');
+  const section = rows && rows.closest('.list');
+  if (!rows || !section) return;
+
+  openTrack = null;
+  const all = store.withBalances(ym).reverse();
+  const keep = new Set(runSearch(onDay(all), search.query).entries.map((e) => e.id));
+  const key = (node) => node.dataset.swipeEntry;
+
+  narrowTo(rows, (node) => keep.has(key(node)), () => {
+    const before = capture(section);
+    glide(rows, () => {
+      paintList();
+      rows.scrollTop = 0;
+    }, key);
+    playChanges(before, section);
+    requestAnimationFrame(syncScroll);
+  });
+
+  // The chart sits above the list, so on a phone the list can be entirely below the
+  // fold when a bar is tapped - and a filter applied where nobody can see it reads as
+  // a tap that did nothing. Only as far as needed to bring the banner into view.
+  const banner = document.getElementById('day-filter');
+  if (next && banner) {
+    const r = banner.getBoundingClientRect();
+    if (r.top > window.innerHeight - 120) {
+      banner.scrollIntoView({ block: 'center', behavior: durationOf('--dur-move') ? 'smooth' : 'auto' });
+    }
+  }
+}
+
 /** Jump to the most recent month that has a match for the current query. */
 function searchAllMonths() {
+  const f = parseQuery(search.query);
   for (const m of store.months()) {
-    // Parsed against each month in turn, because `d:21` means "the 21st of the month
-    // you are looking at" - and while this walks the list, that month keeps changing.
-    const f = parseQuery(search.query, m);
     if (store.entriesFor(m).some((e) => matches(e, f))) {
       ym = m;
       render();
@@ -2396,6 +2344,10 @@ document.addEventListener('click', (e) => {
     }
 
     case 'search-all': searchAllMonths(); break;
+    case 'clear-day':
+      if (dailyChart) dailyChart.clear();
+      pickDay(null);
+      break;
     // Insights: spent or received. From the switch above the donut, or a tap on its
     // centre, which flips to the other side.
     case 'slice-dir': {

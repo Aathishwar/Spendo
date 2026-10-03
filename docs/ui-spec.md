@@ -294,7 +294,19 @@ spent.
 
 Operators carried over from the old bot: `>500`, `>=500`, `<200`, `<=200`, `100-500`, and a
 bare number for an exact amount. Everything else is a keyword, and all keywords must match,
-which is how `/search coffee zomato` behaved. Date operators arrive in phase 5.
+which is how `/search coffee zomato` behaved. There are no date operators: they were built
+and taken out at the owner's request in favour of picking a day on the chart, below.
+
+**One day, from the chart.** Tapping a bar on "Spending per day" narrows the list to that day,
+with a banner over the rows naming it ("Wednesday, 21 October 2026", its count and its money
+out and in) and an **All days** button. Tapping the same bar again also clears it. The pin is
+sticky - unlike the History chart's, a tap elsewhere does not clear it, because the reader is
+about to tap the rows it revealed. It combines with search and with the sort, and the totals
+under the list follow it. Changing month drops it. The change is animated, never swapped: rows
+leaving fade out first (about 140ms), then the rows that stay glide into their new places,
+rows that were not there rise in with a short stagger, and the totals count to their new
+values. If the list is below the fold when a bar is tapped, the page scrolls just far enough
+to show the banner.
 
 Escape closes the field rather than only clearing it, and closing drops the query, so
 reopening never shows a filtered list the user does not remember filtering. Changing tab or
