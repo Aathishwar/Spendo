@@ -69,18 +69,28 @@ let reviewYM = null;
 
 /* ------------------------------------------------------------------- theme */
 
-function applyTheme(theme) {
+function applyTheme(theme, { bar = true } = {}) {
   if (theme === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', theme);
+  if (bar) paintStatusBar();
+}
 
-  // Keep the Android status bar the same colour as the surface behind it. The first
-  // value is written by js/boot-theme.js before the page paints, because by the time
-  // this module runs the bar has already been drawn; this keeps it right afterwards.
+/*
+ * Keep the Android status bar the same colour as the surface behind it. The first
+ * value is written by js/boot-theme.js before the page paints, because by the time
+ * this module runs the bar has already been drawn; this keeps it right afterwards.
+ *
+ * Separate from applyTheme because a theme SWITCH must not move the bar at the same
+ * moment: the page changes under a growing circle and the bar is outside the page,
+ * so a bar that flipped on the tap changed colour half a second before the circle
+ * got anywhere near it. The switch hands this to revealTheme() instead, which calls
+ * it as the circle reaches the top edge.
+ */
+function paintStatusBar() {
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) {
-    const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
-    if (bg) meta.setAttribute('content', bg);
-  }
+  if (!meta) return;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  if (bg) meta.setAttribute('content', bg);
 }
 
 /*
@@ -2232,12 +2242,12 @@ document.addEventListener('click', (e) => {
     const box = el.getBoundingClientRect();
     const tapped = e.clientX || e.clientY;
     revealTheme(() => {
-      applyTheme(theme);
+      applyTheme(theme, { bar: false });
       render();
     }, {
       x: tapped ? e.clientX : box.left + box.width / 2,
       y: tapped ? e.clientY : box.top + box.height / 2
-    });
+    }, paintStatusBar);
     return;
   }
 
