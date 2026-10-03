@@ -186,9 +186,9 @@ Next: phase 2, the server and sync.
   sync, sessions, quotas, the bulk parser, the speech transcript, and the model-reply
   validator. Everything with a DOM in it is still verified by driving a browser - which
   is how the transcript bug got out, since a desktop browser does not reproduce it.
-- **Search is complete.** Keywords, the amount operators (`>500`, `<200`, `100-500`, an
-  exact number) and the date operators (`d:21`, `21-06-2025`, a range, `m:2025-05`,
-  `today`, `yesterday`) all work and combine.
+- **Search is keywords and amounts.** Keywords and the amount operators (`>500`, `<200`,
+  `100-500`, an exact number) combine. The date operators were removed at the owner's
+  request (2026-10-03); a day is picked by tapping its bar on the daily chart instead.
 
 ---
 
@@ -337,7 +337,7 @@ around long enough to delete the event.
 | `/exp <amount> <desc>` | Add screen. Date defaults to today, date picker to backdate. One code path, not two mirrored branches. |
 | `/transactions` | Home, grouped by date, running balance. |
 | `/undo` | Long-press or swipe to delete any row, not only the last one or a description substring match. |
-| `/search <query>` | Search screen. Same operators kept: `>500`, `<200`, `100-500`, `d:21`, `21-06-2025`, `21-06-2025..25-06-2025`, `m:2025-05`. |
+| `/search <query>` | Search screen. Same operators kept: `>500`, `<200`, `100-500`, no date operators - tap a day's bar on the chart instead. |
 | Calendar event per expense | Same, written server-side. |
 | Month close, 28th or 30th | Server job on the real last day of the month. |
 | `/help` | Not needed. It is a user interface. |
@@ -837,27 +837,26 @@ drops the reference, since the node it pointed at no longer exists.
 three snackbars each with their own countdown is not an offer to undo, it is a pile of
 things to dismiss. One bar, one Undo, one restore.
 
-### Searching by date
+### Picking a day, instead of searching for one
 
-The Telegram bot's date grammar, finally reimplemented: `d:21`, `21-06-2025`,
-`21-06-2025..25-06-2025` (the second date may drop the year it shares), `m:2025-05`,
-`today` and `yesterday`. Day-first everywhere, because a search box that wants ISO while
-the screen shows 21-06-2025 is a box people stop typing dates into.
+The Telegram bot's date grammar (`d:21`, `21-06-2025`, ranges, `m:2025-05`, `today`) was
+reimplemented in search and then **removed at the owner's request**: a syntax has to be
+remembered to be used, and the daily chart already draws every day of the month as
+something to tap. Do not put it back without asking.
 
-**Matching is two string comparisons.** Dates are stored as `YYYY-MM-DD` and that sorts
-lexicographically in date order, so a range check needs no parsing and cannot be moved by
-a timezone - the one bug this app has been careful to avoid everywhere else.
+Tapping a bar narrows Home's list to that day (`pickDay` in app.js). Three things about it:
 
-**`d:21` means the 21st of the month on screen**, which is why `parseQuery` takes the
-month as an argument. When "matches in other months" walks the ledger, it re-parses the
-query against each month in turn; parsing once and reusing it would have searched every
-month for the 21st of September.
-
-**A date the calendar does not have is answered, not searched for.** `d:31` in September
-reported "no transaction matches in 31 September 2026" - a date that does not exist,
-phrased as though the app had looked. It now says "September 2026 has no 31st." Every
-date term is also said back in words under the field, so a year typed wrong is visible
-instead of looking like a quiet month.
+- **The pin is sticky.** Every other chart pin clears on a tap anywhere off the chart; this
+  one drives the list, and the next tap is very likely on a row it revealed.
+  `bindPinnableChart` takes `onPick`, and a chart with one keeps its pin until it is undone
+  by the same bar or the banner's All days.
+- **The day is stored as a date, not a day number,** and dropped by `render()` when its
+  month is no longer the one on screen. Half a dozen code paths change `ym`; checking at
+  the one place that reads it is the only version that cannot miss one.
+- **It narrows; it does not swap.** `narrowTo()` in motion.js fades out the visible rows
+  that are leaving, then `glide()` moves the survivors and fades in the arrivals. `glide()`
+  used to ignore a row with no old position, which was harmless for a re-sort (nobody
+  arrives) and meant a widening filter popped its rows in on one frame.
 
 ## Several at once, and one switch over all of it
 

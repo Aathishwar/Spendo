@@ -155,7 +155,7 @@ function searchField(query) {
   return `
     <div class="search-inline">
       <input class="input search-input" id="search-inline" type="search" autocomplete="off"
-        placeholder="Search, or 21-06-2025, d:21, m:2025-05, &gt;500" value="${esc(query)}"
+        placeholder="Search, or &gt;500, &lt;200, 100-500" value="${esc(query)}"
         aria-label="Search transactions">
       <span class="search-inline-icon">${icon('magnifying-glass')}</span>
     </div>`;
@@ -203,18 +203,47 @@ export function txnRows(entries, options) {
   return entries.map((e) => entryRow(e, options)).join('');
 }
 
+/**
+ * Over a list narrowed to one day by a tap on the chart: which day, what moved on it,
+ * and the way back to the whole month. Empty when no day is picked.
+ *
+ * The way back is a labelled button rather than only "tap the bar again", because the
+ * bar may be scrolled out of sight by the time the reader wants the month back.
+ */
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+export function dayBanner(info) {
+  if (!info) return '';
+  const [y, m, d] = info.iso.split('-').map(Number);
+  const weekday = DAY_NAMES[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  const label = friendlyDate(info.iso);
+  const title = label === 'Today' || label === 'Yesterday'
+    ? `${label}, ${longDate(info.iso)}`
+    : `${weekday}, ${longDate(info.iso)}`;
+
+  const parts = [];
+  if (info.spent) parts.push(`${money(info.spent)} out`);
+  if (info.received) parts.push(`${money(info.received)} in`);
+  const sub = info.count
+    ? `${plural(info.count, 'entry', 'entries')} · ${parts.join(' · ')}`
+    : 'Nothing recorded on this day';
+
+  return `
+    <div class="day-banner">
+      <span class="day-banner-main">
+        <span class="day-banner-title">${esc(title)}</span>
+        <span class="day-banner-sub">${esc(sub)}</span>
+      </span>
+      <button class="chip chip-sm day-banner-clear" data-action="clear-day" type="button">
+        ${icon('x')} All days
+      </button>
+    </div>`;
+}
+
 /** The line under the field that reports what the query matched. */
-export function searchNote(result, monthName) {
+export function searchNote(result, where) {
   if (!result.query) return '';
-
-  // A date that cannot exist is answered rather than searched for.
-  if (result.dateImpossible) {
-    return `<p class="search-note">${esc(result.dateLabel)}.</p>`;
-  }
-
-  // A date term is said back in words. A year typed wrong otherwise looks exactly
-  // like a month with nothing in it.
-  const where = result.dateLabel ? esc(result.dateLabel) : esc(monthName);
+  where = esc(where);
 
   if (result.entries.length) {
     return `<p class="search-note">${result.entries.length} in ${where}
@@ -225,7 +254,7 @@ export function searchNote(result, monthName) {
       <button class="link-btn" data-action="search-all" type="button">
         ${result.elsewhere} match${result.elsewhere === 1 ? '' : 'es'} in other months</button></p>`;
   }
-  return `<p class="search-note">No transaction matches${result.dateLabel ? ` in ${where}` : ' that'}.</p>`;
+  return `<p class="search-note">No transaction matches that.</p>`;
 }
 
 function emptyState(title, body, actionLabel, actionId) {
@@ -340,7 +369,8 @@ export function screenToday(ctx) {
           on: search.open
         })}
         ${search.open ? searchField(search.query) : ''}
-        ${search.open ? `<div id="search-note">${searchNote(ctx.searchResult, monthLabel(ym))}</div>` : ''}
+        ${search.open ? `<div id="search-note">${searchNote(ctx.searchResult, ctx.listWhere || monthLabel(ym))}</div>` : ''}
+        <div id="day-filter">${dayBanner(ctx.day)}</div>
         <div class="group-rows" id="txn-rows">${txnRows(shown)}</div>
         <div id="txn-foot">${ledgerFoot(shown)}</div>
       </section>`

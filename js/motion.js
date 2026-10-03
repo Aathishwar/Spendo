@@ -127,9 +127,16 @@ export function glide(container, change, key) {
   const top = Math.max(box.top, 0);
   const bottom = Math.min(box.bottom, window.innerHeight);
   const moves = [];
+  const fresh = [];
   for (const el of container.children) {
     const was = before.get(key(el));
-    if (!was) continue;
+    if (!was) {
+      // Not in the list a moment ago - a filter widening, say. It has no old place to
+      // glide from, so it rises in the way an arriving row does, if it can be seen.
+      const now = el.getBoundingClientRect();
+      if (now.bottom > top && now.top < bottom) fresh.push(el);
+      continue;
+    }
     const now = el.getBoundingClientRect();
     const dy = was.top - now.top;
     if (Math.abs(dy) < 1) continue;
@@ -140,6 +147,14 @@ export function glide(container, change, key) {
   }
 
   const runs = [];
+  fresh.forEach((el, i) => {
+    runs.push(el.animate(
+      [{ opacity: 0, transform: `translateY(${ARRIVE}px)` }, { opacity: 1, transform: 'none' }],
+      // A short stagger, capped, so a widening list reads as filling in from the top
+      // rather than appearing in one frame - and never takes long to finish.
+      { duration, easing, delay: Math.min(i, 6) * 24, fill: 'backwards' }
+    ));
+  });
   for (const { el, dy, arrives } of moves) {
     /*
      * Who passes over whom. Rows rising pass over rows sinking: every row is opaque,
@@ -170,7 +185,61 @@ export function glide(container, change, key) {
    */
   setTimeout(() => {
     for (const run of runs) if (run.playState !== 'finished') run.cancel();
-  }, duration + 250);
+  }, duration + 400);
+}
+
+/**
+ * Fade out the children that are about to leave, then make the change.
+ *
+ * `glide()` alone moves the rows that stay and brings in the new ones, but a row that
+ * is filtered out simply vanishes, and when most of a list goes at once - a month
+ * narrowed to one day - that reads as the list being replaced rather than narrowed.
+ * So the leavers go first, briefly, and only the ones on screen: animating rows nobody
+ * can see is work for nothing.
+ *
+ * `change` always runs, and runs once, whether or not any animation plays, starts, or
+ * finishes. A tap made during the fade cancels it and goes straight to the change.
+ */
+let narrowing = null;
+export function narrowTo(container, stays, change) {
+  if (narrowing) narrowing();
+
+  const duration = Math.round(durationOf('--dur-move') * 0.45);
+  const leaving = [];
+  if (container && duration) {
+    const box = container.getBoundingClientRect();
+    const top = Math.max(box.top, 0);
+    const bottom = Math.min(box.bottom, window.innerHeight);
+    for (const el of container.children) {
+      if (stays(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom > top && r.top < bottom) leaving.push(el);
+    }
+  }
+  if (!leaving.length) {
+    change();
+    return;
+  }
+
+  const runs = leaving.map((el) => el.animate(
+    [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(0.98)' }],
+    { duration, easing: 'ease-in', fill: 'forwards' }
+  ));
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    narrowing = null;
+    clearTimeout(timer);
+    change();
+    // After the change, so a leaver that is still in the DOM is not shown for a frame.
+    for (const run of runs) run.cancel();
+  };
+  narrowing = finish;
+  runs[0].onfinish = finish;
+  // The fallback the rest of this file relies on: an animation that never starts must
+  // not hold the list half-faded.
+  const timer = setTimeout(finish, duration + 120);
 }
 
 /* ------------------------------------------------------- figures that move */
