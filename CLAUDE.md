@@ -1075,7 +1075,7 @@ Asked for by the owner as "animations that make it feel premium". Everything add
 one of the questions in the Motion section of `docs/ui-spec.md`; none of it is decoration.
 Figures on Home count to their new values after a save, edit or delete, the meter and the
 changed bars follow them, a stepped month pages in from its own side, the balance meter
-fills on arrival, sheets play an exit, a theme switch cross-fades, a category on Insights
+fills on arrival, sheets play an exit, a theme switch spreads out from the tapped button as a circle (View Transitions, no library), Spent and Received swap with the ring re-sweeping and rows sliding in from that side, a category on Insights
 unfolds, and a swipe ticks the motor once at the delete threshold. All of it is off under
 `prefers-reduced-motion`, through the duration tokens, including the JS parts.
 
