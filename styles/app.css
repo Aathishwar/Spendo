@@ -2418,3 +2418,15 @@ button { font: inherit; color: inherit; }
   .skeleton { background: var(--surface); }
   .dot-pulse { opacity: 1; }
 }
+
+/*
+ * The theme switch, a circle growing out of the tapped control (revealTheme() in
+ * motion.js). The browser's default for a view transition is a cross-fade of the two
+ * snapshots; that is turned off for this one transition only, so the new snapshot is
+ * revealed by the clip-path animation alone and the old one sits still under it.
+ */
+:root.is-theme-reveal::view-transition-old(root),
+:root.is-theme-reveal::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}

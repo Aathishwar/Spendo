@@ -188,7 +188,8 @@
   --dur-state:        180ms;   /* chip select, tab change, colour change */
   --dur-sheet:        280ms;   /* bottom sheet in, screen transition */
   --dur-move:         320ms;   /* a list re-sorting, rows gliding to new places */
-  --dur-count:        520ms;   /* a figure counting to its new value, a bar or meter following it */
+  --dur-count:        520ms;
+  --dur-reveal:       600ms;   /* the theme spreading out from the tapped control */   /* a figure counting to its new value, a bar or meter following it */
   --press-scale:      0.97;
 
 
@@ -370,6 +371,7 @@
     --dur-sheet:   1ms;
     --dur-move:    1ms;
     --dur-count:   1ms;
+    --dur-reveal:  1ms;
     --press-scale: 1;
   }
 }

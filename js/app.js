@@ -21,7 +21,7 @@ import { guess, remember } from './categorise.js';
 import { parseSpoken } from './bulk.js';
 import { listen, speechSupported } from './voice.js';
 import { workbook } from './xlsx.js';
-import { capture, crossfade, durationOf, enter, glide, narrowTo, playChanges } from './motion.js';
+import { capture, durationOf, enter, glide, narrowTo, playChanges, revealTheme, swapDonut } from './motion.js';
 
 const view = document.getElementById('view');
 const fab = document.getElementById('fab');
@@ -2227,10 +2227,16 @@ document.addEventListener('click', (e) => {
     const theme = el.dataset.theme;
     store.setSetting('theme', theme);
     // Every surface changes colour in the same frame, and a hard cut from light to
-    // dark reads as a flash. Cross-faded, it reads as the lights changing.
-    crossfade(() => {
+    // dark reads as a flash. It spreads out from the button instead. A tap carries its
+    // own coordinates; a keyboard press reports 0,0, so that uses the button's centre.
+    const box = el.getBoundingClientRect();
+    const tapped = e.clientX || e.clientY;
+    revealTheme(() => {
       applyTheme(theme);
       render();
+    }, {
+      x: tapped ? e.clientX : box.left + box.width / 2,
+      y: tapped ? e.clientY : box.top + box.height / 2
     });
     return;
   }
@@ -2356,6 +2362,7 @@ document.addEventListener('click', (e) => {
       sliceDir = next;
       sliceId = null;
       render();
+      swapDonut(view, next);
       break;
     }
     case 'prev-month': ym = shiftYM(ym, -1); sliceId = null; render({ animate: true, from: 'left' }); break;

@@ -827,8 +827,14 @@ backdrop lifts, and only then does the dialog close - Escape, the back gesture a
 backdrop all take the same exit. It is inert while it leaves, so a second tap on Save cannot
 save twice.
 
-**A theme switch cross-fades** through a view transition, where the browser has them.
-Without them, or under reduced motion, it switches at once as before.
+**A theme switch spreads out from the tapped button** as a growing circle, 600ms, through a
+view transition (`revealTheme()` in motion.js). Every pixel is the old theme or the new one
+at every frame; the cross-fade it replaced passed the whole page through a muddy grey. Without
+view transitions (Firefox, older Safari), or under reduced motion, it switches at once.
+
+**Insights switching between Spent and Received** replays the ring's sweep, counts the
+centre total to the other side's, and slides the centre and each category row in from the
+side of the button pressed - right for Received, left for Spent (`swapDonut()`).
 
 **The vibration tick is Android only** - Safari has no vibration API - and it is ten
 milliseconds, once, as a swipe crosses the delete threshold. It is feedback for a thumb that

@@ -582,7 +582,7 @@ export function screenInsights(ctx) {
        <p class="donut-centre-figure money">${esc(money(chosen.amount))}</p>
        <p class="donut-centre-sub">${(chosen.share * 100).toFixed(chosen.share < 0.1 ? 1 : 0)}% ${words.of}</p>`
     : `<p class="donut-centre-label">${words.total}</p>
-       <p class="donut-centre-figure money">${esc(money(total))}</p>
+       <p class="donut-centre-figure money"${roll('donut-total', total)}>${esc(money(total))}</p>
        <p class="donut-centre-sub">${esc(plural(totals.length, 'category', 'categories'))}</p>`;
 
   const list = totals.map((t) => {

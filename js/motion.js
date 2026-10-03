@@ -357,22 +357,114 @@ function count(el, from, to, write, duration) {
   setTimeout(land, duration + 250);
 }
 
-/* --------------------------------------------------------------- crossfade */
+/* ------------------------------------------------------------ theme reveal */
 
 /**
- * Change the whole page under a cross-fade, where the browser has view transitions.
+ * Switch the theme as a circle growing out of the control that was tapped.
  *
- * For a theme switch: every surface changes colour in the same frame, and a hard cut
- * from light to dark reads as a flash. Without the API, or under reduced motion, the
- * change simply happens.
+ * The plain cross-fade it replaced passed every surface through a muddy middle grey
+ * on the way from light to dark, which read as a flicker rather than a change. A
+ * reveal says where the change came from and lets the reader watch the new theme
+ * arrive across a page that stays readable throughout - at every frame each pixel is
+ * either the old theme or the new one, never a blend of the two.
+ *
+ * The browser's View Transitions API does the work: it snapshots the page before and
+ * after `change`, and the new snapshot is clipped by a circle from the tap point out
+ * to the farthest corner. The old one does not animate at all. This is the technique
+ * in "Full-page theme toggle animation with View Transitions API" (Akash Hamirwasia),
+ * done without a library - anime.js would add 41KB gzipped for one clip-path.
+ *
+ * Without the API (Firefox, older Safari) or under reduced motion, the change just
+ * happens. `change` runs exactly once either way.
  */
-export function crossfade(change) {
-  if (typeof document.startViewTransition !== 'function' || !durationOf('--dur-sheet')) {
+export function revealTheme(change, origin) {
+  const duration = durationOf('--dur-reveal') || durationOf('--dur-sheet');
+  if (typeof document.startViewTransition !== 'function' || !duration) {
     change();
     return;
   }
-  const fade = document.startViewTransition(change);
-  // A transition the browser skips - a hidden tab, a second one started on top -
-  // still runs `change`, and rejects `ready`. That is not an error worth a console line.
-  fade.ready.catch(() => {});
+
+  const x = origin ? origin.x : window.innerWidth / 2;
+  const y = origin ? origin.y : window.innerHeight / 2;
+  const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+
+  const root = document.documentElement;
+  // Scopes the CSS that turns off the default cross-fade to this transition alone.
+  root.classList.add('is-theme-reveal');
+  const done = () => root.classList.remove('is-theme-reveal');
+
+  const t = document.startViewTransition(change);
+  t.ready.then(() => {
+    root.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+      {
+        duration,
+        // Fast out of the button, slowing as it reaches the edges: most of the page
+        // has turned by the half-way point and the last corners settle.
+        easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
+        pseudoElement: '::view-transition-new(root)'
+      }
+    );
+  }).catch(() => {});
+  t.finished.then(done, done);
 }
+
+/* ------------------------------------------------------------ donut swap */
+
+/**
+ * Insights flipping between spent and received.
+ *
+ * Called after the screen has been repainted for the other side. Three things move,
+ * and they move in the direction of the switch - Received is the right-hand button,
+ * so its content arrives from the right, and Spent's from the left (Material's shared
+ * axis, the same as a month stepping):
+ *
+ *   - the ring sweeps round from twelve o'clock, as it does on arrival
+ *   - the figure in the centre fades across from that side
+ *   - each category row slides in after the one above it
+ *
+ * Everything is WAAPI with a cancel-if-unfinished timer, never a CSS class: the first
+ * frame of each is something at opacity 0 or a ring with nothing drawn, and CLAUDE.md
+ * records more than once what happens when an animation like that never starts.
+ */
+export function swapDonut(root, side) {
+  const duration = durationOf('--dur-sheet');
+  if (!root || !duration) return;
+  const easing = token('--ease') || 'ease-out';
+  const dx = side === 'in' ? 20 : -20;
+  const runs = [];
+
+  const ring = root.querySelector('.donut-card .chart-donut');
+  if (ring) {
+    // The sweep is a conic mask on a registered angle, the same mask the entrance
+    // uses. Set inline for the run and removed after, whether it finished or not.
+    ring.style.webkitMaskImage = 'conic-gradient(#000 var(--sweep), transparent 0)';
+    ring.style.maskImage = 'conic-gradient(#000 var(--sweep), transparent 0)';
+    const sweep = ring.animate([{ '--sweep': '0deg' }, { '--sweep': '360deg' }], { duration: duration * 2, easing });
+    const unmask = () => { ring.style.webkitMaskImage = ''; ring.style.maskImage = ''; };
+    sweep.onfinish = unmask;
+    sweep.oncancel = unmask;
+    runs.push(sweep);
+  }
+
+  const centre = root.querySelector('.donut-centre-btn');
+  if (centre) {
+    runs.push(centre.animate(
+      [{ opacity: 0, transform: `translateX(${dx * 0.6}px)` }, { opacity: 1, transform: 'none' }],
+      { duration, easing, delay: 60, fill: 'backwards' }
+    ));
+  }
+
+  const rows = [...root.querySelectorAll('.group-rows > .cat-row')];
+  rows.forEach((row, i) => {
+    runs.push(row.animate(
+      [{ opacity: 0, transform: `translateX(${dx}px)` }, { opacity: 1, transform: 'none' }],
+      { duration, easing, delay: 80 + Math.min(i, 8) * 35, fill: 'backwards' }
+    ));
+  });
+
+  setTimeout(() => {
+    for (const run of runs) if (run.playState !== 'finished') run.cancel();
+  }, duration * 2 + 450);
+}
+
