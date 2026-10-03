@@ -48,6 +48,7 @@ let search = { open: false, query: '' };
 // entries went missing from the top.
 let order = 'date';
 let sliceId = null;   // the category chosen on Insights, or null
+let sliceDir = 'out'; // which side Insights is dividing up: 'out' spent, 'in' received
 // The calendar is a mode of whichever sheet is open, not a sheet of its own, so it
 // knows which one to hand the date back to.
 let picking = null;   // { from: 'add' | 'detail', viewYM }
@@ -173,7 +174,7 @@ const TABS = ['today', 'history', 'insights', 'settings'];
 
 function rememberPlace() {
   try {
-    sessionStorage.setItem(PLACE_KEY, JSON.stringify({ tab, ym, order }));
+    sessionStorage.setItem(PLACE_KEY, JSON.stringify({ tab, ym, order, sliceDir }));
   } catch {
     /* storage refused: a reload starts on Home, as it always did */
   }
@@ -192,6 +193,7 @@ function restorePlace() {
   if (TABS.includes(saved.tab)) tab = saved.tab;
   if (/^\d{4}-\d{2}$/.test(saved.ym) && saved.ym <= currentYM()) ym = saved.ym;
   if (saved.order === 'amount' || saved.order === 'date') order = saved.order;
+  if (saved.sliceDir === 'in' || saved.sliceDir === 'out') sliceDir = saved.sliceDir;
 }
 
 /*
@@ -206,7 +208,9 @@ function render({ animate = false, from = null } = {}) {
     stats,
     entries: store.withBalances(ym).reverse(),
     months: monthSummaries(),
-    totals: store.categoryTotals(ym),
+    totals: store.categoryTotals(ym, sliceDir),
+    otherTotals: store.categoryTotals(ym, sliceDir === 'out' ? 'in' : 'out'),
+    sliceDir,
     theme: store.settings().theme,
     sync: sync.syncStatus(),
     install: installState(),
@@ -392,7 +396,7 @@ function openAdd(direction = 'out') {
     categoryTouched: false,
     picked: null
   };
-  openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
+  openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
 }
 
 /**
@@ -408,7 +412,7 @@ function filterSuggestions(form) {
   if (!wrap) return;
 
   const typed = form.elements.description.value;
-  const chips = ui.matchDescriptions(store.descriptionHistory(), typed);
+  const chips = ui.matchDescriptions(store.descriptionHistory(draft ? draft.direction : 'out'), typed);
   const row = wrap.querySelector('.chip-row');
   row.innerHTML = ui.suggestChips(chips);
   wrap.hidden = !chips.length;
@@ -592,7 +596,7 @@ function closeCalendar() {
   const from = picking && picking.from;
   picking = null;
   if (from === 'detail') reopenDetail();
-  else openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
+  else openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
 }
 
 /* ------------------------------------------------------------ month review */
@@ -2267,7 +2271,7 @@ document.addEventListener('click', (e) => {
     draft.picked = null;
     captureDraft();
     draft.category = el.dataset.category;
-    openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
+    openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
     return;
   }
 
@@ -2339,7 +2343,7 @@ document.addEventListener('click', (e) => {
     } else {
       captureDraft();
       draft.date = iso;
-      openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
+      openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction) }));
     }
     return;
   }
@@ -2392,6 +2396,16 @@ document.addEventListener('click', (e) => {
     }
 
     case 'search-all': searchAllMonths(); break;
+    // Insights: spent or received. From the switch above the donut, or a tap on its
+    // centre, which flips to the other side.
+    case 'slice-dir': {
+      const next = el.dataset.dir || (sliceDir === 'out' ? 'in' : 'out');
+      if (next === sliceDir) break;
+      sliceDir = next;
+      sliceId = null;
+      render();
+      break;
+    }
     case 'prev-month': ym = shiftYM(ym, -1); sliceId = null; render({ animate: true, from: 'left' }); break;
     case 'next-month':
       if (ym < currentYM()) { ym = shiftYM(ym, 1); sliceId = null; render({ animate: true, from: 'right' }); }

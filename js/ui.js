@@ -499,15 +499,48 @@ function tipsCard(tips) {
 
 export function screenInsights(ctx) {
   const { ym, stats, totals } = ctx;
+  const dir = ctx.sliceDir === 'in' ? 'in' : 'out';
+  const other = ctx.otherTotals || [];
   const selected = ctx.sliceId || null;
 
   const head = `<header class="topbar">${monthSwitcher(ym)}</header>`;
 
-  if (!totals.length) {
+  if (!totals.length && !other.length) {
     return head + emptyState(
-      `Nothing spent in ${monthLabel(ym)}.`,
-      'Categories and their shares appear once there are expenses to divide up.'
+      `Nothing recorded in ${monthLabel(ym)}.`,
+      'Categories and their shares appear once there is money in or out to divide up.'
     );
+  }
+
+  const words = dir === 'in'
+    ? { total: 'Received', of: 'of money in', flip: 'spending' }
+    : { total: 'Spent', of: 'of spending', flip: 'income' };
+  const total = dir === 'in' ? stats.received : stats.spent;
+
+  /*
+   * Spent or received. Two answers to "where did the money go" and "where did it
+   * come from", and the donut can only draw one at a time without mixing them into
+   * a single meaningless whole. The switch is the visible way across; a tap on the
+   * centre is the shortcut, since the centre is where the total being divided sits.
+   */
+  const switcher = `
+    <div class="seg donut-seg" role="group" aria-label="Show">
+      <button type="button" class="seg-btn ${dir === 'out' ? 'is-selected' : ''}"
+        data-action="slice-dir" data-dir="out" aria-pressed="${dir === 'out'}">
+        Spent <span class="seg-figure money">${esc(money(stats.spent))}</span></button>
+      <button type="button" class="seg-btn ${dir === 'in' ? 'is-selected' : ''}"
+        data-action="slice-dir" data-dir="in" aria-pressed="${dir === 'in'}">
+        Received <span class="seg-figure money">${esc(money(stats.received))}</span></button>
+    </div>`;
+
+  if (!totals.length) {
+    return head + `
+      <section class="card donut-card">
+        ${switcher}
+        <p class="card-note donut-none">${dir === 'in'
+          ? `Nothing received in ${esc(monthLabel(ym))}.`
+          : `Nothing spent in ${esc(monthLabel(ym))}.`}</p>
+      </section>`;
   }
 
   const chosen = selected ? totals.find((t) => t.id === selected) : null;
@@ -517,9 +550,9 @@ export function screenInsights(ctx) {
   const centre = chosen
     ? `<p class="donut-centre-label">${esc(category(chosen.id).label)}</p>
        <p class="donut-centre-figure money">${esc(money(chosen.amount))}</p>
-       <p class="donut-centre-sub">${(chosen.share * 100).toFixed(chosen.share < 0.1 ? 1 : 0)}% of spending</p>`
-    : `<p class="donut-centre-label">Spent</p>
-       <p class="donut-centre-figure money">${esc(money(stats.spent))}</p>
+       <p class="donut-centre-sub">${(chosen.share * 100).toFixed(chosen.share < 0.1 ? 1 : 0)}% ${words.of}</p>`
+    : `<p class="donut-centre-label">${words.total}</p>
+       <p class="donut-centre-figure money">${esc(money(total))}</p>
        <p class="donut-centre-sub">${esc(plural(totals.length, 'category', 'categories'))}</p>`;
 
   const list = totals.map((t) => {
@@ -540,24 +573,28 @@ export function screenInsights(ctx) {
         ${icon(on ? 'caret-up' : 'caret-down', 'cat-caret')}
       </button>
       ${on ? `<div class="cat-expand">${txnRows(
-        ctx.entries.filter((e) => e.category === t.id && e.direction === 'out'),
+        ctx.entries.filter((e) => e.category === t.id && e.direction === dir),
         { showCategory: false, swipe: false }
       )}</div>` : ''}`;
   }).join('');
 
   return head + `
     <section class="card donut-card">
+      ${switcher}
       <div class="donut-wrap">
         ${donutSVG(totals, selected)}
-        <div class="donut-centre">${centre}</div>
+        <div class="donut-centre">
+          <button type="button" class="donut-centre-btn" data-action="slice-dir"
+            aria-label="Show ${words.flip} instead">${centre}</button>
+        </div>
       </div>
       <p class="card-hint donut-hint">${selected
         ? 'Tap the row again to close it'
-        : 'Tap a slice or a row to see what is in it'}</p>
+        : `Tap a slice or a row to see what is in it, or the centre for ${words.flip}`}</p>
     </section>
 
     <section class="list">
-      ${listHead('chart-pie', 'By category')}
+      ${listHead('chart-pie', dir === 'in' ? 'Received, by category' : 'Spent, by category')}
       <div class="group-rows">${list}</div>
     </section>`;
 }

@@ -527,7 +527,8 @@ Two more rules that are easy to get wrong:
 
 **Suggestion chips search the whole history, not the chips on screen.** The row
 shows the eight most recent descriptions until something is typed; from then on it is
-rebuilt from every description ever used (`store.descriptionHistory()`), because the
+rebuilt from every description ever used on that side - I paid and I received each
+have their own (`store.descriptionHistory(direction)`) -, because the
 one worth offering back is usually older than the last eight - filtering only what was
 already showing meant a description from March could never be suggested. Best match
 first: starts with what was typed, then a word starting with it, then contains it, each
