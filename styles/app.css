@@ -1074,6 +1074,7 @@ button { font: inherit; color: inherit; }
   font-weight: var(--weight-medium);
   color: var(--ink-3);
 }
+.suggest[hidden] { display: none; }
 .suggest .chip-row { min-width: 0; }
 
 /*

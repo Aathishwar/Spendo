@@ -525,12 +525,15 @@ Two more rules that are easy to get wrong:
 
 ### Two things that look like the same feature and are not
 
-**Suggestion chips move to the front on their own.** Hiding the misses is enough,
-because a hidden chip takes no space in a flex row. What that does NOT do is put the
-LIKELIEST one first: typing "cof" left a more recently used "Morning filter coffee"
-ahead of "Coffee beans refill". Anything starting with what was typed now sorts
-first; everything else keeps its recency order, which is what `data-rank` on each
-chip is for, and the original order is restored when the field is cleared.
+**Suggestion chips search the whole history, not the chips on screen.** The row
+shows the eight most recent descriptions until something is typed; from then on it is
+rebuilt from every description ever used (`store.descriptionHistory()`), because the
+one worth offering back is usually older than the last eight - filtering only what was
+already showing meant a description from March could never be suggested. Best match
+first: starts with what was typed, then a word starting with it, then contains it, each
+in recency order, capped at twelve. Only the chip row's children are replaced, never
+the sheet, so the input keeps focus. `.suggest` sets `display`, so it needs its own
+`[hidden]` rule - without one the "Matches" label stayed on screen over an empty row.
 
 **Tapping a suggestion runs the category guess too.** It is a description arriving,
 which is the same event as one being typed, so it goes through the same path -

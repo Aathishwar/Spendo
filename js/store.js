@@ -433,15 +433,25 @@ export function totalEntries() {
   return n;
 }
 
-/** Descriptions used before, most recent first, for the add sheet's suggestions. */
-export function recentDescriptions(limit = 8) {
-  const seen = [];
-  for (let i = state.entries.length - 1; i >= 0 && seen.length < limit; i--) {
+/**
+ * Every description ever used, once each, newest first.
+ *
+ * The add sheet searches THIS as you type, not the handful of recent chips it shows
+ * before you start: something last bought in March is exactly the description worth
+ * offering back, and it is never among the last eight.
+ */
+export function descriptionHistory() {
+  const seen = new Set();
+  const out = [];
+  for (let i = state.entries.length - 1; i >= 0; i--) {
     const e = state.entries[i];
     if (e.deletedAt || !e.description) continue;
-    if (!seen.some((s) => s.toLowerCase() === e.description.toLowerCase())) seen.push(e.description);
+    const key = e.description.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e.description);
   }
-  return seen;
+  return out;
 }
 
 /* ---------------------------------------------------------------- settings */

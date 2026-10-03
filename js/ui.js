@@ -1022,18 +1022,46 @@ function suggestRow(suggestions, current) {
   const list = suggestions || [];
   if (!list.length) return '';
 
-  const typed = String(current || '').trim().toLowerCase();
-  const shown = (s) => !typed || (s.toLowerCase().includes(typed) && s.toLowerCase() !== typed);
-
+  const chips = matchDescriptions(list, current);
   return `
-    <div class="suggest" data-suggest ${list.some(shown) ? '' : 'hidden'}>
-      <span class="suggest-label">Recent</span>
-      <div class="chip-row">
-        ${list.map((s, i) => `
-          <button type="button" class="chip chip-sm" data-suggest-value="${esc(s)}"
-            data-rank="${i}" ${shown(s) ? '' : 'hidden'}>${esc(s)}</button>`).join('')}
-      </div>
+    <div class="suggest" data-suggest ${chips.length ? '' : 'hidden'}>
+      <span class="suggest-label" data-suggest-label>${String(current || '').trim() ? 'Matches' : 'Recent'}</span>
+      <div class="chip-row">${suggestChips(chips)}</div>
     </div>`;
+}
+
+const RECENT_SHOWN = 8;
+const MATCHES_SHOWN = 12;
+
+/**
+ * Which past descriptions to offer for what has been typed so far.
+ *
+ * `history` is every description ever used, newest first. With nothing typed it is
+ * the most recent few; with something typed the WHOLE history is searched, not only
+ * the chips that happened to be on screen. Best match first: starts with what was
+ * typed, then has a word starting with it, then merely contains it, each tier in
+ * recency order. An exact match is left out - offering to fill in what is already
+ * there is a control that does nothing.
+ */
+export function matchDescriptions(history, current) {
+  const typed = String(current || '').trim().toLowerCase();
+  if (!typed) return history.slice(0, RECENT_SHOWN);
+
+  const tiers = [[], [], []];
+  for (const s of history) {
+    const v = s.toLowerCase();
+    if (v === typed || !v.includes(typed)) continue;
+    if (v.startsWith(typed)) tiers[0].push(s);
+    else if (v.split(/\s+/).some((w) => w.startsWith(typed))) tiers[1].push(s);
+    else tiers[2].push(s);
+    if (tiers[0].length >= MATCHES_SHOWN) break;
+  }
+  return tiers.flat().slice(0, MATCHES_SHOWN);
+}
+
+export function suggestChips(list) {
+  return list.map((s) => `
+    <button type="button" class="chip chip-sm" data-suggest-value="${esc(s)}">${esc(s)}</button>`).join('');
 }
 
 /*

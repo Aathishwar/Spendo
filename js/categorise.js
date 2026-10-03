@@ -137,7 +137,8 @@ const KEYWORDS = {
   ],
   salary: ['salary', 'stipend', 'wages', 'payroll', 'credited', 'incentive', 'bonus'],
   refund: ['refund', 'refunded', 'return', 'returned', 'cashback', 'reversal', 'settled'],
-  gift: ['gift', 'gifted', 'birthday', 'shagun', 'present']
+  gift: ['gift', 'gifted', 'birthday', 'shagun', 'present'],
+  debt: ['debt', 'loan', 'borrowed', 'borrow', 'lent', 'repaid', 'repayment', 'kadan']
 };
 
 /** keyword -> category id, built once. */

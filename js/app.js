@@ -392,69 +392,34 @@ function openAdd(direction = 'out') {
     categoryTouched: false,
     picked: null
   };
-  openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
+  openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
 }
 
 /**
- * Show only the recent descriptions that still match what has been typed.
+ * Offer the past descriptions that match what has been typed, from the whole history.
  *
- * Done by toggling `hidden` on chips that are already in the DOM, never by
- * re-rendering the sheet: re-rendering replaces the input, which drops focus and
- * closes the keyboard on the second character of every word.
+ * Only the chip row is rebuilt, never the sheet: re-rendering the sheet replaces the
+ * input, which drops focus and closes the keyboard on the second character of every
+ * word. The row is a sibling of the input, so replacing its children leaves the caret
+ * alone. Ranking lives in `ui.matchDescriptions`, shared with the first paint.
  */
 function filterSuggestions(form) {
   const wrap = form.querySelector('[data-suggest]');
   if (!wrap) return;
 
-  const typed = form.elements.description.value.trim().toLowerCase();
-  const chips = [...wrap.querySelectorAll('[data-suggest-value]')];
-  let any = false;
-
-  for (const chip of chips) {
-    const value = chip.dataset.suggestValue.toLowerCase();
-    // An exact match is hidden too: offering to fill in what is already there is a
-    // control that does nothing.
-    const show = !typed || (value.includes(typed) && value !== typed);
-    chip.hidden = !show;
-    any = any || show;
-  }
-  wrap.hidden = !any;
-
-  /*
-   * Best match first.
-   *
-   * Hiding the misses already brings the matches to the front, because a hidden chip
-   * takes no space in the row. What it does not do is put the LIKELIEST one there:
-   * typing "cof" left "Morning filter coffee" ahead of "Coffee beans refill" purely
-   * because it was used more recently. Something starting with what you typed is
-   * almost always the one you meant, so it goes first; everything else keeps its
-   * recency order, which is what `data-rank` is for.
-   *
-   * With nothing typed the original order is restored, so the row does not
-   * quietly stay shuffled from the last thing that was in it.
-   */
+  const typed = form.elements.description.value;
+  const chips = ui.matchDescriptions(store.descriptionHistory(), typed);
   const row = wrap.querySelector('.chip-row');
-  const rank = (c) => Number(c.dataset.rank || 0);
-  const ordered = chips.slice().sort((a, b) => {
-    if (!typed) return rank(a) - rank(b);
-    const pa = a.dataset.suggestValue.toLowerCase().startsWith(typed) ? 0 : 1;
-    const pb = b.dataset.suggestValue.toLowerCase().startsWith(typed) ? 0 : 1;
-    return pa - pb || rank(a) - rank(b);
-  });
-  for (const chip of ordered) row.append(chip);
+  row.innerHTML = ui.suggestChips(chips);
+  wrap.hidden = !chips.length;
+
+  const label = wrap.querySelector('[data-suggest-label]');
+  if (label) label.textContent = typed.trim() ? 'Matches' : 'Recent';
 
   /*
    * Back to the start of the row, because the row is a horizontal scroller and
-   * reordering its children does not move it.
-   *
-   * This is the bug that made the whole feature look broken: type a few more
-   * letters, the best match is moved to position 0 - and position 0 is off the left
-   * edge of a row still scrolled to wherever the last look through the recents left
-   * it. The match was being computed correctly and then parked out of sight, so the
-   * only way to see the suggestion was to scroll back by hand.
-   *
-   * Set, not animated: the content under the finger has already changed, and
-   * sliding to it would draw a scroll the user did not ask for on every keystroke.
+   * replacing its children does not move it. Left where it was, the best match lands
+   * off the left edge and the feature looks broken.
    */
   if (row.scrollLeft !== 0) row.scrollLeft = 0;
 }
@@ -627,7 +592,7 @@ function closeCalendar() {
   const from = picking && picking.from;
   picking = null;
   if (from === 'detail') reopenDetail();
-  else openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
+  else openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
 }
 
 /* ------------------------------------------------------------ month review */
@@ -2302,7 +2267,7 @@ document.addEventListener('click', (e) => {
     draft.picked = null;
     captureDraft();
     draft.category = el.dataset.category;
-    openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
+    openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
     return;
   }
 
@@ -2374,7 +2339,7 @@ document.addEventListener('click', (e) => {
     } else {
       captureDraft();
       draft.date = iso;
-      openSheet(ui.addSheet({ ...draft, suggestions: store.recentDescriptions() }));
+      openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory() }));
     }
     return;
   }
