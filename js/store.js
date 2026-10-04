@@ -227,9 +227,7 @@ export function setOpening(ym, amount) {
   commit([ym]);
 }
 
-export function addOpening(ym, amount) {
-  setOpening(ym, openingOf(ym) + (Number(amount) || 0));
-}
+
 
 /** Every month that has an opening balance or at least one entry, newest first. */
 export function months() {

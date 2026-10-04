@@ -333,7 +333,7 @@ around long enough to delete the event.
 
 | n8n | Spendo |
 |---|---|
-| `/start <amount>` | Settings, opening money. Set and Add are separate explicit actions, since the bot silently added while claiming to set. |
+| `/start <amount>` | The balance card on Home: its foot strip opens the month's money and **Change opening money**. Only Set; money arriving mid month is an I received entry. The bot silently added while claiming to set, and the later "Add to it" was dropped as a recordless duplicate of income. |
 | `/exp <amount> <desc>` | Add screen. Date defaults to today, date picker to backdate. One code path, not two mirrored branches. |
 | `/transactions` | Home, grouped by date, running balance. |
 | `/undo` | Long-press or swipe to delete any row, not only the last one or a description substring match. |

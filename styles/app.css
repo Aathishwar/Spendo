@@ -248,6 +248,40 @@ button { font: inherit; color: inherit; }
   color: var(--on-hero-dim);
 }
 .hero-note .money { font-weight: var(--weight-medium); }
+
+.hero-card[data-action] { cursor: pointer; }
+/* Where the pot comes from, and the way to change it. A button the card's full width,
+   so the thumb does not have to find the word "Edit". */
+.hero-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--tap-min);
+  margin-top: var(--space-1);
+  padding: var(--space-2) 0 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--on-hero) 14%, transparent);
+  background: none;
+  color: var(--on-hero-dim);
+  font: inherit;
+  font-size: var(--text-caption);
+  text-align: left;
+  cursor: pointer;
+}
+.hero-foot-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-foot b { color: var(--on-hero); font-weight: var(--weight-semibold); }
+.hero-foot-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  color: var(--on-hero);
+  font-weight: var(--weight-semibold);
+}
+.hero-foot-go .icon { width: 14px; height: 14px; }
+.month-money-rows { margin-bottom: var(--space-4); }
 .hero-card .dot-sep::before { color: var(--on-hero-dim); }
 
 /* A single ratio against a limit, so a meter rather than a chart: one track, one

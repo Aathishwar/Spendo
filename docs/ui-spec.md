@@ -249,14 +249,21 @@ the chart scannable, the list makes it readable.
 ### 4. Settings
 
 Three sections, each a `listHead` plus a `field-rows` group, so the screen reads as one
-settings surface rather than as loose cards: opening money, appearance, and your data.
+settings surface rather than as loose cards: install, appearance, assist, sync, and your data.
 Explanatory prose sits under its group in `--ink-3`, never inside a row.
 
 Field labels are short nouns. A long value like a month name belongs in the value column, not
 the 92px label column, where it wraps.
 
-Opening money offers **Set** and **Add** as two separate labelled actions. The old bot said
-"set" in its help text and added in its code.
+**Opening money is not in Settings.** It moved to Home on 2026-10-04: Settings has no
+month of its own, so it quietly edited whichever month Home was last showing. The balance
+card now ends in a full-width strip - "Started with ₹14,972 · received ₹4,000 · Edit ›" -
+which also explains where the pot in "of ₹18,972 used" comes from, and the whole card opens
+a sheet for the month on screen: opening, received, spent, left, and one button, **Change
+opening money**. There is no "Add to it": money that arrives mid month is an entry under
+I received, which has a date, a description and a category, and a second, recordless way
+to do the same thing only made the reader choose. Top-ups made with it before then stay
+folded into that month's opening figure.
 
 ### Modal surfaces
 
