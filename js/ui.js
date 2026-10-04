@@ -328,8 +328,14 @@ export function screenToday(ctx) {
   const pot = stats.opening + stats.received;
   const used = pot > 0 ? Math.min(1, stats.spent / pot) : 0;
 
+  /*
+   * The foot of the card says where the pot comes from - what the month started with,
+   * and what came in since - and is the way to change the first of those. It used to
+   * live in Settings, which had no month of its own and quietly edited whichever
+   * month Home was last showing. The whole card opens the same sheet.
+   */
   const balanceCard = `
-    <section class="card hero-card">
+    <section class="card hero-card" data-action="month-money">
       <p class="hero-label">Balance left</p>
       <p class="hero-figure money"${roll('balance', stats.balance)}>${esc(money(stats.balance))}</p>
       <div class="meter" role="img"
@@ -341,6 +347,12 @@ export function screenToday(ctx) {
         <span class="money"${roll('pot', pot)}>${esc(money(pot))}</span> used
         ${stats.isCurrent ? `<span class="dot-sep"></span> ${esc(plural(stats.daysLeft, 'day', 'days'))} left` : ''}
       </p>
+      <button class="hero-foot" data-action="month-money" type="button"
+        aria-label="Opening money for ${esc(monthLabel(ym))}: ${esc(money(stats.opening))}. Edit">
+        <span class="hero-foot-text">Started with <b class="money">${esc(money(stats.opening))}</b>${stats.received
+          ? ` <span class="dot-sep"></span> received <b class="money">${esc(money(stats.received))}</b>` : ''}</span>
+        <span class="hero-foot-go">Edit ${icon('caret-right')}</span>
+      </button>
     </section>`;
 
   const chartCard = stats.spent > 0 ? `
@@ -904,25 +916,6 @@ export function screenSettings(ctx) {
       <h1 class="screen-title">Settings</h1>
     </header>
 
-    <section class="list">
-      ${listHead('wallet', 'Opening money')}
-      <div class="field-rows">
-        <div class="field-row">
-          <span class="field-row-label">Month</span>
-          <span class="field-row-value">${esc(monthLabel(ym))}</span>
-        </div>
-        <div class="field-row">
-          <span class="field-row-label">Amount</span>
-          <span class="field-row-value money">${esc(money(stats.opening))}</span>
-        </div>
-        <div class="field-row field-row-actions">
-          <button class="btn btn-primary btn-sm" data-action="set-opening" type="button">Set amount</button>
-          <button class="btn btn-text btn-sm" data-action="add-opening" type="button">Add to it</button>
-        </div>
-      </div>
-      <p class="card-note note-under">What you started the month with, before any expense.
-        Set replaces it; Add tops it up when more money arrives mid month.</p>
-    </section>
 
     <section class="list">
       ${listHead('download-simple', 'Install')}
@@ -1008,7 +1001,7 @@ const INTRO = [
   {
     icon: 'wallet',
     title: 'Start the month with a figure',
-    body: 'Set your opening money in Settings and the balance counts down from it as you spend. Top it up with Add to it whenever more arrives mid month.'
+    body: 'Tap the balance card on Home to set what the month started with, and the balance counts down from it as you spend. Money that comes in later goes in through Add, under I received.'
   }
 ];
 
@@ -1657,6 +1650,38 @@ export function detailSheet(e, editing) {
       <button class="btn btn-danger btn-block" data-action="delete-entry" data-entry="${esc(e.id)}" type="button">
         ${icon('trash-simple')} Delete
       </button>
+    </div>`;
+}
+
+/**
+ * The month's money, opened from the balance card: where the pot came from and where
+ * it went, and one way to change what the month started with.
+ *
+ * There is deliberately no "add to it". Money that arrives mid month is an entry under
+ * I received - with a date, a description and a category, in the list and on
+ * Insights - and a second, recordless way to do the same thing only asks the reader
+ * to choose between them.
+ */
+export function monthMoneySheet({ ym, stats }) {
+  const row = (label, value) => `
+    <div class="field-row">
+      <span class="field-row-label">${esc(label)}</span>
+      <span class="field-row-value money">${esc(money(value))}</span>
+    </div>`;
+  return `
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Close">${icon('x')}</button>
+        <h2 class="sheet-title">${esc(monthLabel(ym))}</h2>
+      </div>
+      <div class="field-rows month-money-rows">
+        ${row('Opening', stats.opening)}
+        ${row('Received', stats.received)}
+        ${row('Spent', stats.spent)}
+        ${row('Left', stats.balance)}
+      </div>
+      <button class="btn btn-primary btn-block" data-action="set-opening" type="button">Change opening money</button>
+      <p class="card-note">Money that comes in during the month goes in through Add, under I received.</p>
     </div>`;
 }
 

@@ -2658,6 +2658,10 @@ document.addEventListener('click', (e) => {
     case 'carry-over': carryOver(); break;
     case 'set-budget': openBudget(el.dataset.budgetCat); break;
 
+    case 'month-money':
+      openSheet(ui.monthMoneySheet({ ym, stats: store.monthStats(ym) }));
+      break;
+
     case 'set-opening':
       openSheet(ui.amountSheet({
         title: `Opening money for ${monthLabel(ym)}`,
@@ -2666,17 +2670,9 @@ document.addEventListener('click', (e) => {
         confirm: 'Set amount'
       }));
       document.getElementById('amount-form').dataset.mode = 'set';
+      if (store.openingOf(ym)) document.getElementById('amount-form').elements.amount.value = String(store.openingOf(ym));
       break;
 
-    case 'add-opening':
-      openSheet(ui.amountSheet({
-        title: `Add to ${monthLabel(ym)}`,
-        note: 'Adds to the opening money rather than replacing it. Use this when more money arrives mid month.',
-        label: 'Amount to add',
-        confirm: 'Add amount'
-      }));
-      document.getElementById('amount-form').dataset.mode = 'add';
-      break;
 
     default: break;
   }
@@ -2841,8 +2837,7 @@ document.addEventListener('submit', (e) => {
         : `${category(id).label} budget removed.`, null, null, 'check-bold');
       return;
     }
-    if (form.dataset.mode === 'add') store.addOpening(ym, amount);
-    else store.setOpening(ym, amount);
+    store.setOpening(ym, amount);
     closeSheet();
     render();
   }
