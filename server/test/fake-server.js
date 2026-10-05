@@ -34,7 +34,7 @@ let seq = 0;
 
 function bucket(email) {
   if (!accounts.has(email)) {
-    accounts.set(email, { id: crypto.randomUUID(), entries: new Map(), months: new Map() });
+    accounts.set(email, { id: crypto.randomUUID(), entries: new Map(), months: new Map(), budgets: new Map(), recurring: new Map() });
   }
   return accounts.get(email);
 }
@@ -115,15 +115,31 @@ app.post('/api/sync', (req, res) => {
     store.months.set(m.ym, { ...m, seq: ++seq });
   }
 
-  const entries = [...store.entries.values()].filter((r) => r.seq > since).sort((a, b) => a.seq - b.seq);
-  const months = [...store.months.values()].filter((r) => r.seq > since).sort((a, b) => a.seq - b.seq);
-  const all = [...entries, ...months].map((r) => r.seq);
+  for (const b of req.body?.budgets || []) {
+    const held = store.budgets.get(b.category);
+    if (held && held.updatedAt >= b.updatedAt) continue;
+    store.budgets.set(b.category, { ...b, seq: ++seq });
+  }
+  for (const r of req.body?.recurring || []) {
+    const held = store.recurring.get(r.id);
+    if (held && held.updatedAt >= r.updatedAt) continue;
+    store.recurring.set(r.id, { ...r, auto: Boolean(r.auto) && r.amount !== null, seq: ++seq });
+  }
+
+  const after = (m) => [...m.values()].filter((r) => r.seq > since).sort((a, b) => a.seq - b.seq);
+  const entries = after(store.entries);
+  const months = after(store.months);
+  const budgets = after(store.budgets);
+  const recurring = after(store.recurring);
+  const all = [...entries, ...months, ...budgets, ...recurring].map((r) => r.seq);
 
   res.json({
     cursor: all.length ? Math.max(...all) : since,
     hasMore: false,
     entries,
     months,
+    budgets,
+    recurring,
     rejected: [],
     serverTime: Date.now()
   });
@@ -135,7 +151,9 @@ app.get('/api/_dump', (_req, res) => {
     email,
     accountId: s.id,
     entries: [...s.entries.values()],
-    months: [...s.months.values()]
+    months: [...s.months.values()],
+    budgets: [...s.budgets.values()],
+    recurring: [...s.recurring.values()]
   })));
 });
 

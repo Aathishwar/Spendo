@@ -14,7 +14,7 @@
  * on the next read, because there is no stored figure to be wrong.
  */
 
-import { currentYM, daysInMonth, dayOf, todayISO, ymOf } from './format.js';
+import { currentYM, daysInMonth, dayOf, shiftYM, todayISO, ymOf } from './format.js';
 
 const KEY = 'spendo.v1';
 
@@ -39,9 +39,13 @@ const EMPTY = {
   // { items, stamp, madeAt }. The last set of spending suggestions. One set, not one
   // per month: they are advice about a habit, and the habit is not a calendar month.
   tips: null,
-  // category id -> rupees a month. Spending categories only. Kept with the settings,
-  // on this phone: the server has no table for them yet, so they do not sync.
-  budgets: {}
+  // category id -> { amount, updatedAt, dirty }. Spending categories only. Synced;
+  // an amount of 0 is a removed budget, kept so the removal reaches other devices.
+  // An older build stored a bare number here, which budgetOf() still reads.
+  budgets: {},
+  // rule id -> { description, amount|null, direction, category, day, auto, paused,
+  // startYM, skips: [ym], updatedAt, deletedAt, dirty }. Autopay; see dueRecurring().
+  recurring: {}
 };
 
 /*
@@ -89,7 +93,8 @@ function load() {
       settings: { ...EMPTY.settings, ...(parsed.settings || {}) },
       sync: { ...EMPTY.sync, ...(parsed.sync || {}) },
       reviews: { ...(parsed.reviews || {}) },
-      budgets: { ...(parsed.budgets || {}) }
+      budgets: { ...(parsed.budgets || {}) },
+      recurring: { ...(parsed.recurring || {}) }
     };
     delete base.monthKeys;
 
@@ -266,10 +271,12 @@ export function entry(entryId) {
   return state.entries.find((e) => e.id === entryId) || null;
 }
 
-export function addEntry({ amount, direction = 'out', description, category, date }) {
+export function addEntry({ amount, direction = 'out', description, category, date, id: given }) {
   const when = date || todayISO();
   const record = {
-    id: id(),
+    // An autopay occurrence brings its own id (rec-<rule>-<ym>), so the same month
+    // added on two devices is one record, not two.
+    id: given || id(),
     date: when,
     ym: ymOf(when),
     amount: Math.abs(Number(amount) || 0),
@@ -617,13 +624,24 @@ export function pendingChanges() {
         opening: Number(m.opening) || 0,
         closedAt: m.closedAt ?? null,
         updatedAt: m.updatedAt || Date.now()
-      }))
+      })),
+    // A bare number is a budget from before budgets synced: it has never been sent.
+    budgets: Object.entries(state.budgets || {})
+      .filter(([, b]) => typeof b !== 'object' || b.dirty)
+      .map(([category, b]) => ({
+        category,
+        amount: typeof b === 'object' ? Number(b.amount) || 0 : Number(b) || 0,
+        updatedAt: (typeof b === 'object' && b.updatedAt) || Date.now()
+      })),
+    recurring: Object.entries(state.recurring || {})
+      .filter(([, r]) => r.dirty)
+      .map(([ruleId, r]) => ({ ...r, id: ruleId, dirty: undefined }))
   };
 }
 
 export function pendingCount() {
-  const { entries, months } = pendingChanges();
-  return entries.length + months.length;
+  const { entries, months, budgets, recurring } = pendingChanges();
+  return entries.length + months.length + budgets.length + recurring.length;
 }
 
 /**
@@ -634,7 +652,7 @@ export function pendingCount() {
  * a record while the request was in flight its local `updatedAt` is now newer than
  * the server's copy, so it is left alone, stays dirty, and goes again next round.
  */
-export function applySync({ entries = [], months = [], cursor = null }) {
+export function applySync({ entries = [], months = [], budgets = [], recurring = [], cursor = null }) {
   const byId = new Map(state.entries.map((e) => [e.id, e]));
   const touched = new Set();
 
@@ -662,6 +680,21 @@ export function applySync({ entries = [], months = [], cursor = null }) {
       updatedAt: incoming.updatedAt,
       dirty: false
     };
+  }
+
+  // Budgets and rules: the same rule - a newer local copy is kept and goes again.
+  state.budgets = { ...(state.budgets || {}) };
+  for (const b of budgets) {
+    const local = state.budgets[b.category];
+    if (local && typeof local === 'object' && (local.updatedAt || 0) > (b.updatedAt || 0)) continue;
+    state.budgets[b.category] = { amount: Number(b.amount) || 0, updatedAt: b.updatedAt, dirty: false };
+  }
+  state.recurring = { ...(state.recurring || {}) };
+  for (const incoming of recurring) {
+    const { seq, id: ruleId, ...rule } = incoming;
+    const local = state.recurring[ruleId];
+    if (local && (local.updatedAt || 0) > (rule.updatedAt || 0)) continue;
+    state.recurring[ruleId] = { ...rule, skips: Array.isArray(rule.skips) ? rule.skips : [], dirty: false };
   }
 
   if (cursor !== null) state.sync.cursor = cursor;
@@ -695,6 +728,8 @@ export function resetSyncCursor() {
 export function clearLedger() {
   state.entries = [];
   state.months = {};
+  state.budgets = {};
+  state.recurring = {};
   state.sync = { cursor: 0, lastSyncedAt: null };
   commit();
 }
@@ -804,15 +839,15 @@ export function setReviewText(ym, text) {
 
 /** The monthly budget for a spending category, or 0 for none. */
 export function budgetOf(categoryId) {
-  return Number(state.budgets?.[categoryId]) || 0;
+  const held = state.budgets?.[categoryId];
+  if (held && typeof held === 'object') return Number(held.amount) || 0;
+  return Number(held) || 0;
 }
 
 /** Set a category's monthly budget. Zero, or nothing, removes it. */
 export function setBudget(categoryId, amount) {
-  const value = Math.round((Number(amount) || 0) * 100) / 100;
-  state.budgets = { ...(state.budgets || {}) };
-  if (value > 0) state.budgets[categoryId] = value;
-  else delete state.budgets[categoryId];
+  const value = Math.max(0, Math.round((Number(amount) || 0) * 100) / 100);
+  state.budgets = { ...(state.budgets || {}), [categoryId]: { amount: value, updatedAt: Date.now(), dirty: true } };
   commit([]);
 }
 
@@ -830,6 +865,155 @@ export function budgetStatus(categoryId, ym, adding = 0) {
   }
   const after = spent + (Number(adding) || 0);
   return { budget, spent, after, left: budget - spent, leftAfter: budget - after, used: spent / budget, usedAfter: after / budget };
+}
+
+/* ----------------------------------------------------------------- autopay */
+
+/*
+ * Things that come round every month: rent, a subscription, an EMI, a salary.
+ *
+ * A rule says what and when. Each month's occurrence is an ordinary entry whose id is
+ * built from the rule and the month, `rec-<rule>-<ym>`, and that id is the whole
+ * bookkeeping: a month is done when that entry exists - added, edited, or even
+ * deleted afterwards - or when the month is in the rule's skips. Two devices adding
+ * the same month produce the same id, which the server merges into one row.
+ *
+ * "Asks first" is the default and "adds on its own" is opt-in, because a payment that
+ * failed or a subscription cancelled last week would otherwise put money in the ledger
+ * that never moved.
+ */
+
+/** How far back a missed month is still offered: this one and the two before it. */
+const CATCH_UP_MONTHS = 2;
+
+export function occurrenceId(ruleId, ym) {
+  return `rec-${ruleId}-${ym}`;
+}
+
+/** The day a rule falls on in a month, clamped: the 31st in September is the 30th. */
+export function dueDateOf(rule, ym) {
+  const day = Math.min(Number(rule.day) || 1, daysInMonth(ym));
+  return `${ym}-${String(day).padStart(2, '0')}`;
+}
+
+/** Every live rule, by the day of the month it falls on. */
+export function recurringRules() {
+  return Object.entries(state.recurring || {})
+    .filter(([, r]) => !r.deletedAt)
+    .map(([ruleId, r]) => ({ ...r, id: ruleId }))
+    .sort((a, b) => a.day - b.day || String(a.description).localeCompare(b.description));
+}
+
+export function recurringRule(ruleId) {
+  const r = state.recurring?.[ruleId];
+  return r && !r.deletedAt ? { ...r, id: ruleId } : null;
+}
+
+/** Create or change a rule. Returns its id. */
+export function saveRecurring(rule) {
+  const ruleId = rule.id || id();
+  const was = state.recurring?.[ruleId] || {};
+  const amount = rule.amount === null || rule.amount === '' || rule.amount === undefined
+    ? null : Math.abs(Number(rule.amount) || 0);
+  state.recurring = {
+    ...(state.recurring || {}),
+    [ruleId]: {
+      description: String(rule.description ?? was.description ?? '').trim(),
+      amount,
+      direction: (rule.direction ?? was.direction) === 'in' ? 'in' : 'out',
+      category: rule.category ?? was.category ?? 'other',
+      day: Math.min(31, Math.max(1, Math.round(Number(rule.day ?? was.day) || 1))),
+      auto: Boolean(rule.auto ?? was.auto) && amount !== null,
+      paused: Boolean(rule.paused ?? was.paused),
+      startYM: rule.startYM ?? was.startYM ?? currentYM(),
+      skips: Array.isArray(was.skips) ? was.skips : [],
+      updatedAt: Date.now(),
+      deletedAt: null,
+      dirty: true
+    }
+  };
+  commit([]);
+  return ruleId;
+}
+
+/** Stop repeating. A tombstone, so other devices stop too. */
+export function deleteRecurring(ruleId) {
+  const r = state.recurring?.[ruleId];
+  if (!r) return;
+  state.recurring = { ...state.recurring, [ruleId]: { ...r, deletedAt: Date.now(), updatedAt: Date.now(), dirty: true } };
+  commit([]);
+}
+
+/** Pass on one month without recording anything for it. */
+export function skipRecurring(ruleId, ym) {
+  const r = state.recurring?.[ruleId];
+  if (!r) return;
+  const skips = [...new Set([...(r.skips || []), ym])].sort().slice(-36);
+  state.recurring = { ...state.recurring, [ruleId]: { ...r, skips, updatedAt: Date.now(), dirty: true } };
+  commit([]);
+}
+
+/**
+ * Occurrences that are due and not yet done, oldest first, as of `today`.
+ *
+ * A month is offered once its day has arrived, from the rule's first month onwards,
+ * and no further back than CATCH_UP_MONTHS - an app left closed all summer should
+ * offer the last few rents, not a year of them.
+ */
+export function dueRecurring(today = todayISO()) {
+  const now = ymOf(today);
+  const out = [];
+  for (const rule of recurringRules()) {
+    if (rule.paused) continue;
+    for (let back = CATCH_UP_MONTHS; back >= 0; back -= 1) {
+      const ym = shiftYM(now, -back);
+      if (ym < rule.startYM) continue;
+      const date = dueDateOf(rule, ym);
+      if (date > today) continue;
+      if ((rule.skips || []).includes(ym)) continue;
+      if (entry(occurrenceId(rule.id, ym))) continue;
+      out.push({ rule, ym, date });
+    }
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+/** Take a skip back. */
+export function unskipRecurring(ruleId, ym) {
+  const r = state.recurring?.[ruleId];
+  if (!r) return;
+  state.recurring = { ...state.recurring, [ruleId]: { ...r, skips: (r.skips || []).filter((m) => m !== ym), updatedAt: Date.now(), dirty: true } };
+  commit([]);
+}
+
+/**
+ * Remove an entry outright, as if it had never been added - only one this device has
+ * never sent. Used to undo an autopay occurrence: a tombstone would count as the month
+ * being done, and the card the person meant to bring back would stay away.
+ */
+export function purgeUnsentEntry(entryId) {
+  const e = entry(entryId);
+  if (!e || !e.dirty) return false;
+  state.entries = state.entries.filter((x) => x.id !== entryId);
+  commit([e.ym]);
+  return true;
+}
+
+/** Record one occurrence as an entry. `amount` overrides a rule whose amount varies. */
+export function addOccurrence(ruleId, ym, amount) {
+  const rule = recurringRule(ruleId);
+  if (!rule) return null;
+  const value = amount ?? rule.amount;
+  if (!(Number(value) > 0)) return null;
+  if (entry(occurrenceId(ruleId, ym))) return null;
+  return addEntry({
+    id: occurrenceId(ruleId, ym),
+    amount: value,
+    direction: rule.direction,
+    description: rule.description,
+    category: rule.category,
+    date: dueDateOf(rule, ym)
+  });
 }
 
 /* --------------------------------------------------- entries with no account */
@@ -880,6 +1064,15 @@ export function keepUnsyncedOnly({ months = true } = {}) {
     }
   }
   state.months = kept;
+  // Budgets and autopay go with the opening money: one's own unsent ones are kept
+  // and yield to the account's, somebody else's are not carried.
+  const keepOwn = (map) => (months
+    ? Object.fromEntries(Object.entries(map || {})
+      .filter(([, v]) => typeof v !== 'object' || v.dirty)
+      .map(([k, v]) => [k, typeof v === 'object' ? { ...v, updatedAt: 1, dirty: true } : { amount: Number(v) || 0, updatedAt: 1, dirty: true }]))
+    : {});
+  state.budgets = keepOwn(state.budgets);
+  state.recurring = keepOwn(state.recurring);
   state.sync = { cursor: 0, lastSyncedAt: null };
   commit();
 }

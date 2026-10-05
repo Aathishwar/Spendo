@@ -287,3 +287,74 @@ test("one account's records do not count against another's ceiling", async () =>
 
   await client.end();
 });
+
+/* --------------------------------------------------- budgets and recurring */
+
+import { readBudgetForTest, readRuleForTest } from '../src/sync.js';
+
+function pushBudget(db, accountId, b) {
+  db.public.none(`
+    insert into budgets (account_id, category, amount, updated_at, change_seq)
+    values ('${accountId}', '${b.category}', ${b.amount}, '${b.updatedAt}', nextval('change_seq'))
+    on conflict (account_id, category) do update set
+      amount     = excluded.amount,
+      updated_at = excluded.updated_at,
+      change_seq = nextval('change_seq')
+    where excluded.updated_at > budgets.updated_at`);
+}
+
+function pushRule(db, accountId, r) {
+  db.public.none(`
+    insert into recurring
+      (id, account_id, description, amount, direction, category, day, auto, paused,
+       start_ym, skips, updated_at, deleted_at, change_seq)
+    values ('${r.id}', '${accountId}', '${r.description}', ${r.amount === null ? 'null' : r.amount},
+            '${r.direction}', '${r.category}', ${r.day}, ${r.auto}, ${r.paused},
+            '${r.startYM}', '${r.skips}', '${r.updatedAt}', ${r.deletedAt ? `'${r.deletedAt}'` : 'null'},
+            nextval('change_seq'))
+    on conflict (account_id, id) do update set
+      description = excluded.description,
+      amount      = excluded.amount,
+      direction   = excluded.direction,
+      category    = excluded.category,
+      day         = excluded.day,
+      auto        = excluded.auto,
+      paused      = excluded.paused,
+      start_ym    = excluded.start_ym,
+      skips       = excluded.skips,
+      updated_at  = excluded.updated_at,
+      deleted_at  = excluded.deleted_at,
+      change_seq  = nextval('change_seq')
+    where excluded.updated_at > recurring.updated_at`);
+}
+
+test('a budget follows last-write-wins, and an older one does not overwrite it', () => {
+  const db = freshDb();
+  pushBudget(db, ACCOUNT_A, { category: 'food', amount: 6000, updatedAt: '2026-10-05T10:00:00Z' });
+  pushBudget(db, ACCOUNT_A, { category: 'food', amount: 4000, updatedAt: '2026-10-05T09:00:00Z' });
+  const [row] = db.public.many(`select amount from budgets where account_id = '${ACCOUNT_A}'`);
+  assert.equal(Number(row.amount), 6000);
+});
+
+test('a recurring rule round-trips, with a null amount, its skips and a tombstone', () => {
+  const db = freshDb();
+  const base = { id: 'r1', description: 'Electricity', amount: null, direction: 'out', category: 'bills',
+    day: 12, auto: false, paused: false, startYM: '2026-10', skips: '2026-10', updatedAt: '2026-10-05T10:00:00Z' };
+  pushRule(db, ACCOUNT_A, base);
+  pushRule(db, ACCOUNT_A, { ...base, updatedAt: '2026-10-05T11:00:00Z', deletedAt: '2026-10-05T11:00:00Z' });
+  pushRule(db, ACCOUNT_B, { ...base, description: 'Not yours' });
+  const rows = db.public.many(`select * from recurring where account_id = '${ACCOUNT_A}'`);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].amount, null);
+  assert.equal(rows[0].skips, '2026-10');
+  assert.ok(rows[0].deleted_at, 'stopping a rule is a tombstone, so other devices stop too');
+});
+
+test('the readers refuse what they cannot store, and a varying amount cannot add itself', () => {
+  assert.throws(() => readBudgetForTest({ category: 'food', amount: -1, updatedAt: 1 }));
+  assert.throws(() => readRuleForTest({ id: 'x', direction: 'out', day: 32, startYM: '2026-10', updatedAt: 1 }));
+  const r = readRuleForTest({ id: 'x', amount: null, direction: 'out', category: 'bills', day: 31, auto: true,
+    startYM: '2026-10', skips: ['2026-10', 'junk'], updatedAt: 0 });
+  assert.equal(r.auto, false);
+  assert.equal(r.skips, '2026-10');
+});

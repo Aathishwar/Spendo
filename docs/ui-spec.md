@@ -304,6 +304,11 @@ bare number for an exact amount. Everything else is a keyword, and all keywords 
 which is how `/search coffee zomato` behaved. There are no date operators: they were built
 and taken out at the owner's request in favour of picking a day on the chart, below.
 
+**Autopay cards.** What has come round from a repeating rule sits between the figures and
+the Transactions list, current month only, as dashed cards - dashed because they are not
+entries yet. Fixed amount: **Add it** / **Skip <month>**. Varying amount: **Enter amount**,
+which opens the add sheet filled in. Rules are listed in Settings under **Every month**.
+
 **One day, from the chart.** Tapping a bar on "Spending per day" narrows the list to that day,
 with a banner over the rows naming it ("Wednesday, 21 October 2026", its count and its money
 out and in) and an **All days** button. Tapping the same bar again also clears it. The pin is
@@ -603,7 +608,7 @@ met it again every launch, which is how an intro turns into an obstacle.
 
 ### Bottom navigation
 Fixed, `--surface`, `1px` top `--line`, height `--nav-height` plus `--safe-bottom`. Four
-items: Today, History, Insights, Settings. Active item is `--brand` for both icon and label
+items: Home, Insights, History, Settings (Insights moved second on 2026-10-05 at the owner's request). Active item is `--brand` for both icon and label
 plus a `--brand-tint` pill behind the icon. Inactive is `--ink-3`.
 
 ### Calendar

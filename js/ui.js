@@ -311,7 +311,7 @@ export function screenToday(ctx) {
             Carry over ${esc(money(amount))}</button>
           <button class="btn btn-text" data-action="set-opening" type="button">Set a different amount</button>
         </div>
-      </div>`;
+      </div>` + dueCards(ctx.due);
   }
 
   if (stats.opening === 0 && stats.count === 0) {
@@ -320,7 +320,7 @@ export function screenToday(ctx) {
       'Set what you started the month with, then add expenses as they happen.',
       'Set opening money',
       'set-opening'
-    );
+    ) + dueCards(ctx.due);
   }
 
   // A single ratio against a limit, so: a meter, not a chart. How much of the money
@@ -415,7 +415,7 @@ export function screenToday(ctx) {
       'open-add'
     );
 
-  return head + balanceCard + chartCard + figures + list;
+  return head + balanceCard + chartCard + figures + dueCards(ctx.due) + list;
 }
 
 export function screenHistory(ctx) {
@@ -916,6 +916,7 @@ export function screenSettings(ctx) {
       <h1 class="screen-title">Settings</h1>
     </header>
 
+    ${recurringSection(ctx.recurring)}
 
     <section class="list">
       ${listHead('download-simple', 'Install')}
@@ -1278,7 +1279,7 @@ function orderedCats(cats, chosen) {
   return pick ? [pick, ...cats.filter((c) => c.id !== chosen)] : cats;
 }
 
-export function addSheet({ direction, category: catId, date, amount, description, suggestions, picked, budget }) {
+export function addSheet({ direction, category: catId, date, amount, description, suggestions, picked, budget, repeat, repeatAuto, fromRule }) {
   const all = categoriesFor(direction);
   const chosen = catId || all[0].id;
   const cats = orderedCats(all, chosen);
@@ -1335,7 +1336,170 @@ export function addSheet({ direction, category: catId, date, amount, description
 
       ${dateField(date)}
 
+      ${fromRule ? `<p class="card-note repeat-from">${icon('repeat')} For ${esc(fromRule.label)}, which repeats every month.</p>`
+        : repeatBox(date, repeat, repeatAuto)}
+
       <button class="btn btn-primary btn-block" type="submit">Save</button>
+    </form>`;
+}
+
+const ordinalOf = (n) => {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+};
+
+/*
+ * "Repeat every month" in the add sheet: the way into autopay from the moment it is
+ * first paid. A real checkbox and real radios, styled, so turning it on is a change
+ * of form state and not a re-render - and the choices underneath show through CSS
+ * (:has), so nothing redraws the sheet while somebody is typing in it.
+ */
+function repeatBox(date, on, auto) {
+  const day = ordinalOf(Number(String(date || todayISO()).slice(8, 10)));
+  return `
+    <div class="repeat-box">
+      <label class="switch-row">
+        <span class="switch-text"><b>Repeat every month</b><small>On the ${esc(day)}</small></span>
+        <input class="switch" type="checkbox" name="repeat" ${on ? 'checked' : ''}>
+      </label>
+      <div class="repeat-more" role="radiogroup" aria-label="When it comes round">
+        <label class="chip chip-sm chip-radio"><input type="radio" name="repeatAuto" value="ask" ${auto ? '' : 'checked'}> Ask me first</label>
+        <label class="chip chip-sm chip-radio"><input type="radio" name="repeatAuto" value="auto" ${auto ? 'checked' : ''}> Add it on its own</label>
+      </div>
+    </div>`;
+}
+
+/* ----------------------------------------------------------------- autopay */
+
+/**
+ * What has come round and is waiting: a card per occurrence, above the list on Home.
+ * A fixed amount is one tap to add; an amount that changes asks for it; either can be
+ * skipped for the month. Dashed, not solid: these are not entries yet.
+ */
+export function dueCards(due) {
+  if (!due || !due.length) return '';
+  const today = todayISO();
+  return `
+    <section class="due-list" aria-label="Due">
+      ${due.map(({ rule, ym, date }) => {
+        const cat = category(rule.category);
+        const when = date === today ? 'Due today' : `Due ${friendlyDate(date)}`;
+        const fixed = rule.amount !== null && rule.amount > 0;
+        return `
+        <div class="due-card">
+          <span class="row-tile" style="--tile-hue:${seriesVar(rule.category)}">${icon(cat.icon)}</span>
+          <span class="due-main">
+            <span class="due-title">${esc(rule.description || cat.label)}${fixed
+              ? ` <span class="dot-sep"></span> <span class="money">${esc(rule.direction === 'in' ? signedMoney(rule.amount, 'in') : money(rule.amount))}</span>` : ''}</span>
+            <span class="due-sub">${esc(when)} <span class="dot-sep"></span> ${esc(fixed ? cat.label : 'the amount changes, so enter it')}</span>
+            <span class="due-actions">
+              ${fixed
+                ? `<button class="btn btn-primary btn-sm" data-action="due-add" data-rule="${esc(rule.id)}" data-ym="${esc(ym)}" type="button">Add it</button>`
+                : `<button class="btn btn-primary btn-sm" data-action="due-enter" data-rule="${esc(rule.id)}" data-ym="${esc(ym)}" type="button">Enter amount</button>`}
+              <button class="btn btn-text btn-sm" data-action="due-skip" data-rule="${esc(rule.id)}" data-ym="${esc(ym)}" type="button">Skip ${esc(monthLabel(ym).split(' ')[0])}</button>
+            </span>
+          </span>
+        </div>`;
+      }).join('')}
+    </section>`;
+}
+
+function ruleSub(r) {
+  const how = r.amount === null ? 'asks for the amount' : r.auto ? 'adds on its own' : 'asks first';
+  return [ordinalOf(r.day), r.direction === 'in' ? 'income' : null, how, r.paused ? 'paused' : null]
+    .filter(Boolean).join(' · ');
+}
+
+/** Settings: every rule, and the way to add one. */
+export function recurringSection(rules) {
+  const list = rules || [];
+  const out = list.filter((r) => !r.paused && r.direction === 'out' && r.amount !== null)
+    .reduce((a, r) => a + r.amount, 0);
+  const varies = list.some((r) => !r.paused && r.direction === 'out' && r.amount === null);
+  const rows = list.map((r) => {
+    const cat = category(r.category);
+    return `
+      <button class="row rule-row ${r.paused ? 'is-paused' : ''}" data-action="rule-open" data-rule="${esc(r.id)}" type="button">
+        <span class="row-tile" style="--tile-hue:${seriesVar(r.category)}">${icon(cat.icon)}</span>
+        <span class="row-main">
+          <span class="row-title">${esc(r.description || cat.label)}</span>
+          <span class="row-sub">${esc(ruleSub(r))}</span>
+        </span>
+        <span class="row-end">${r.amount === null
+          ? '<span class="rule-varies">varies</span>'
+          : `<span class="row-amount money ${r.direction === 'in' ? 'is-in' : ''}">${esc(r.direction === 'in' ? signedMoney(r.amount, 'in') : money(r.amount))}</span>`}</span>
+      </button>`;
+  }).join('');
+  return `
+    <section class="list">
+      ${listHead('repeat', 'Every month', { id: 'rule-new', icon: 'plus', label: 'Add something that repeats' })}
+      ${list.length
+        ? `<div class="group-rows">${rows}</div>
+           <p class="card-note note-under">${out ? `${esc(money(out))} a month goes out on a schedule${varies ? ', plus the ones that vary' : ''}. ` : ''}Tap one to change, pause or stop it.</p>`
+        : `<p class="card-note">Rent, a subscription, an EMI, a salary - anything that comes round every month. Add it once and it shows up on Home when it is due. You can also turn on "Repeat every month" when you add an expense.</p>`}
+    </section>`;
+}
+
+/** Creating or changing a rule. One form; the category chips follow the direction by CSS. */
+export function ruleSheet(rule) {
+  const r = rule || { description: '', amount: null, direction: 'out', category: 'rent', day: Number(todayISO().slice(8, 10)), auto: false, paused: false };
+  const chips = (dir) => categoriesFor(dir).map((c) => `
+    <label class="chip chip-radio cat-${dir}"><input type="radio" name="category" value="${esc(c.id)}"
+      ${r.direction === dir && r.category === c.id ? 'checked' : ''}> ${icon(c.icon)} ${esc(c.label)}</label>`).join('');
+  return `
+    <form class="sheet-body rule-form" id="rule-form" novalidate data-rule="${esc(r.id || '')}">
+      <div class="sheet-head">
+        <button class="icon-btn" data-action="close-sheet" type="button" aria-label="Close">${icon('x')}</button>
+        <h2 class="sheet-title">${r.id ? esc(r.description || 'Repeats monthly') : 'Every month'}</h2>
+      </div>
+
+      <div class="seg rule-dir" role="radiogroup" aria-label="Direction">
+        <label class="seg-btn chip-radio"><input type="radio" name="direction" value="out" ${r.direction === 'out' ? 'checked' : ''}> I pay</label>
+        <label class="seg-btn chip-radio"><input type="radio" name="direction" value="in" ${r.direction === 'in' ? 'checked' : ''}> I receive</label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">What is it</span>
+        <input class="input" name="description" type="text" autocomplete="off" maxlength="80"
+          placeholder="Rent, Netflix, phone EMI" value="${esc(r.description || '')}">
+        <span class="field-error" data-error="description" hidden></span>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Amount</span>
+        <span class="field-money">
+          <span class="field-prefix">${icon('currency-inr')}</span>
+          <input class="input input-amount money" name="amount" type="text" inputmode="decimal"
+            autocomplete="off" placeholder="Leave empty if it changes" value="${r.amount === null || r.amount === undefined ? '' : esc(String(r.amount))}">
+        </span>
+        <span class="field-error" data-error="amount" hidden></span>
+      </label>
+
+      <div class="field">
+        <span class="field-label">Category</span>
+        <div class="chip-row rule-cats" role="radiogroup" aria-label="Category">${chips('out')}${chips('in')}</div>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Day of the month</span>
+        <input class="input input-day" name="day" type="text" inputmode="numeric" maxlength="2"
+          autocomplete="off" value="${esc(String(r.day || ''))}">
+        <span class="field-error" data-error="day" hidden></span>
+      </label>
+
+      <label class="switch-row">
+        <span class="switch-text"><b>Add it on its own</b><small>Off: it waits on Home for you to confirm. Needs a fixed amount.</small></span>
+        <input class="switch" type="checkbox" name="auto" ${r.auto ? 'checked' : ''}>
+      </label>
+      ${r.id ? `
+      <label class="switch-row">
+        <span class="switch-text"><b>Paused</b><small>Keep it, but stop it coming up</small></span>
+        <input class="switch" type="checkbox" name="paused" ${r.paused ? 'checked' : ''}>
+      </label>` : ''}
+
+      <button class="btn btn-primary btn-block" type="submit">${r.id ? 'Save changes' : 'Add'}</button>
+      ${r.id ? `<button class="btn btn-danger btn-block" data-action="rule-delete" data-rule="${esc(r.id)}" type="button">Stop repeating</button>` : ''}
     </form>`;
 }
 
