@@ -1187,10 +1187,60 @@ declined.
   would drop the keyboard.
 - Meter colour: ink, then `--warn` from 85%, then `--spend` over 100%. The words always
   carry the same fact, so colour is never the only channel.
-- **Budgets live on this phone only**, in `state.budgets` beside the settings. The server
-  has no table for them, so they do not sync and a second device starts without them.
-  Syncing them needs a `budgets` table, a migration, and a third kind of record in
-  `/api/sync`.
+- **Budgets sync** (from 2026-10-05): a `budgets` table keyed on (account, category),
+  last-write-wins like everything else, and an amount of 0 is a removed budget kept so
+  the removal travels. A budget saved by the build before that is a bare number in
+  `state.budgets`; `budgetOf()` still reads it and `pendingChanges()` sends it up.
+
+## Autopay: things that come round every month (2026-10-05)
+
+Rent, a subscription, an EMI, a salary. Four places, all built at the owner's request:
+
+1. **The add sheet** has a "Repeat every month" switch under the date, with "Ask me first"
+   (the default) or "Add it on its own". Saving makes a rule from that entry.
+2. **Home** shows what has come round as dashed cards above the list, on the current
+   month only: **Add it** for a fixed amount (with a 6s undo), **Enter amount** for one
+   that varies, and **Skip <month>**.
+3. **Settings → Every month** lists every rule with its day and how it behaves; **+**
+   adds one.
+4. **The rule sheet** edits one: direction, what, amount (empty = it varies), category,
+   day, add on its own, paused, and Stop repeating.
+
+How it holds together - read this before changing any of it:
+
+- **A rule says what and when; each month is an ordinary entry** with the id
+  `rec-<rule>-<ym>`. That id IS the bookkeeping: a month is done when that entry exists
+  (even deleted afterwards) or the month is in the rule's `skips`. Two devices adding the
+  same month produce one row, because the server merges on the id. Do not give an
+  occurrence a random id.
+- **Ask first is the default.** A failed payment or a cancelled subscription would
+  otherwise put money in the ledger that never moved. An amount that varies can never add
+  itself; the server enforces that too.
+- **Auto-adding runs on launch (after the first sync has had 3s), when the app comes to
+  the front, and after a sync brings rules in** - never on a timer while the app is open,
+  which would add rent under somebody reading the list.
+- **Undo of "Add it" purges, it does not tombstone.** A tombstone counts the month as
+  done and the card would not come back. The occurrence is held out of the push for the
+  undo window (`sync.holdBack`) so the purge is of something never sent.
+- **A new rule starts the next time its day comes round.** Set up on the 5th for the 1st,
+  this month's rent is assumed already recorded. From the add sheet it starts this month,
+  because that entry IS this month's occurrence.
+- **Missed months are offered back two months**, not further: an app left closed all
+  summer should not present a year of rent.
+- The switches and the category chips in the rule sheet are real checkboxes and radios,
+  shown and hidden with `:has()` - nothing re-renders a sheet somebody is typing in.
+- `serverTakesExtras` in sync.js: a server deployed before budgets and recurring never
+  acknowledges them, and counting them as pending would schedule a sync after every
+  sync. The first reply without a `budgets` array turns them off as work.
+
+Tables: `budgets` and `recurring` in schema.sql, repeated in migrations.sql for a live
+database. Tests: the readers and the upserts in `sync.test.js`, the due logic and the
+round trip in `store.test.js`. Verified end to end against `test/fake-server.js` with two
+browser contexts on one account: rules, skips and budgets reach the second device, and an
+auto rule produces exactly one row on the server and on each device.
+
+**Navigation order** is Home, Insights, History, Settings (Insights moved second on
+2026-10-05 at the owner's request).
 
 ## Later, by the owner's choice
 

@@ -157,10 +157,12 @@ export function release(ids) {
  * an undo offer. Every caller that builds a push goes through this.
  */
 function sendableChanges() {
-  const { entries, months } = store.pendingChanges();
+  const { entries, months, budgets, recurring } = store.pendingChanges();
   return {
     entries: entries.filter((e) => !isHeld(e.id)),
-    months
+    months,
+    budgets,
+    recurring
   };
 }
 
@@ -250,10 +252,10 @@ async function run(reason) {
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const { entries, months } = sendableChanges();
+      const { entries, months, budgets, recurring } = sendableChanges();
       const { cursor } = store.syncMeta();
 
-      const out = await postSync({ since: cursor, entries, months });
+      const out = await postSync({ since: cursor, entries, months, budgets, recurring });
 
       for (const r of out.rejected || []) {
         if (!rejected.has(r.id)) {
@@ -262,8 +264,15 @@ async function run(reason) {
         rejected.set(r.id, r.reason);
       }
 
-      store.applySync({ entries: out.entries, months: out.months, cursor: out.cursor });
-      if (out.entries.length || out.months.length) delivered = true;
+      // A server older than the client sends no budgets or recurring; they stay dirty
+      // and go again once it does, which is the same as any unacknowledged write.
+      serverTakesExtras = Array.isArray(out.budgets);
+      const gotBudgets = out.budgets || [];
+      const gotRules = out.recurring || [];
+      store.applySync({
+        entries: out.entries, months: out.months, budgets: gotBudgets, recurring: gotRules, cursor: out.cursor
+      });
+      if (out.entries.length || out.months.length || gotBudgets.length || gotRules.length) delivered = true;
 
       // Keep going while the server has more pages, or while this device still has
       // something to send - an edit made mid-request leaves the set non-empty.
@@ -273,7 +282,10 @@ async function run(reason) {
       if (!out.hasMore && !stillDirty) break;
 
       // Nothing moved and nothing left to send: stop rather than spin.
-      if (!out.hasMore && stillDirty && entries.length === 0 && months.length === 0) break;
+      if (!out.hasMore && stillDirty && !entries.length && !months.length && !budgets.length && !recurring.length) break;
+      // A server that does not know budgets or recurring yet will never acknowledge
+      // them: stop rather than resend them for every remaining round.
+      if (!out.hasMore && !out.budgets && !entries.length && !months.length) break;
     }
 
     failures = 0;
@@ -308,10 +320,21 @@ function scheduleRetry() {
 /* ----------------------------------------------------------------- triggers */
 
 /** How much of the dirty set the server has not already refused. */
+/*
+ * Whether the server takes budgets and recurring rules. Assumed until a reply says
+ * otherwise; a server deployed before them never acknowledges either, and counting
+ * them as work then would schedule a sync after every sync, the loop described above.
+ */
+let serverTakesExtras = true;
+
 function sendableCount() {
-  const { entries, months } = sendableChanges();
+  const { entries, months, budgets, recurring } = sendableChanges();
   return entries.filter((e) => !rejected.has(e.id)).length
-       + months.filter((m) => !rejected.has(m.ym)).length;
+       + months.filter((m) => !rejected.has(m.ym)).length
+       + (serverTakesExtras
+         ? budgets.filter((b) => !rejected.has(b.category)).length
+           + recurring.filter((r) => !rejected.has(r.id)).length
+         : 0);
 }
 
 /** Called after any local write. Debounced, so a burst of edits is one request. */
@@ -350,15 +373,15 @@ export function startSync() {
   // page, which a normal fetch would not.
   window.addEventListener('pagehide', () => {
     if (paused) return;
-    const { entries, months } = sendableChanges();
-    if (!entries.length && !months.length) return;
+    const { entries, months, budgets, recurring } = sendableChanges();
+    if (!entries.length && !months.length && !budgets.length && !recurring.length) return;
     if (!isSignedIn() || !navigator.onLine) return;
     try {
       fetch('/api/sync', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ since: store.syncMeta().cursor, entries, months }),
+        body: JSON.stringify({ since: store.syncMeta().cursor, entries, months, budgets, recurring }),
         keepalive: true
       }).catch(() => {});
     } catch { /* the browser is going away; there is nothing to recover to */ }

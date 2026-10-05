@@ -97,6 +97,76 @@ function readMonth(raw) {
   };
 }
 
+function readBudget(raw) {
+  if (!raw || typeof raw !== 'object') throw new BadRequest('a budget was not an object');
+  const category = raw.category;
+  if (typeof category !== 'string' || !category || category.length > 64) {
+    throw new BadRequest('a budget has no usable category');
+  }
+  const amount = Number(raw.amount);
+  if (!Number.isFinite(amount) || amount < 0 || amount > MAX_AMOUNT) {
+    throw new BadRequest(`budget for ${category} is out of range`);
+  }
+  if (!hasStamp(raw.updatedAt)) throw new BadRequest(`updatedAt is missing on budget ${category}`);
+  return { category, amount, updatedAt: toStamp(raw.updatedAt, 'updatedAt', category) };
+}
+
+function readRule(raw) {
+  if (!raw || typeof raw !== 'object') throw new BadRequest('a recurring entry was not an object');
+  const id = raw.id;
+  if (typeof id !== 'string' || !id || id.length > 128) throw new BadRequest('a recurring entry has no usable id');
+  const amount = raw.amount === null || raw.amount === undefined ? null : Number(raw.amount);
+  if (amount !== null && (!Number.isFinite(amount) || amount < 0 || amount > MAX_AMOUNT)) {
+    throw new BadRequest(`amount on recurring ${id} is out of range`);
+  }
+  if (raw.direction !== 'in' && raw.direction !== 'out') {
+    throw new BadRequest(`direction on recurring ${id} must be "in" or "out"`);
+  }
+  const day = Number(raw.day);
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new BadRequest(`day on recurring ${id} must be 1 to 31`);
+  if (!isYM(raw.startYM)) throw new BadRequest(`startYM on recurring ${id} is not YYYY-MM`);
+  const skips = Array.isArray(raw.skips) ? raw.skips.filter(isYM).slice(-36) : [];
+  if (!hasStamp(raw.updatedAt)) throw new BadRequest(`updatedAt is missing on recurring ${id}`);
+  return {
+    id,
+    description: String(raw.description ?? '').slice(0, 500),
+    amount,
+    direction: raw.direction,
+    category: String(raw.category ?? 'other').slice(0, 64),
+    day,
+    // An amount that changes each month cannot be added without asking for it.
+    auto: Boolean(raw.auto) && amount !== null,
+    paused: Boolean(raw.paused),
+    startYM: raw.startYM,
+    skips: skips.join(','),
+    updatedAt: toStamp(raw.updatedAt, 'updatedAt', id),
+    deletedAt: toStamp(raw.deletedAt ?? null, 'deletedAt', id)
+  };
+}
+
+const budgetOut = (r) => ({
+  category: r.category,
+  amount: Number(r.amount),
+  updatedAt: toMillis(r.updated_at),
+  seq: Number(r.change_seq)
+});
+
+const ruleOut = (r) => ({
+  id: r.id,
+  description: r.description,
+  amount: r.amount === null ? null : Number(r.amount),
+  direction: r.direction,
+  category: r.category,
+  day: Number(r.day),
+  auto: Boolean(r.auto),
+  paused: Boolean(r.paused),
+  startYM: r.start_ym,
+  skips: r.skips ? r.skips.split(',').filter(Boolean) : [],
+  updatedAt: toMillis(r.updated_at),
+  deletedAt: toMillis(r.deleted_at),
+  seq: Number(r.change_seq)
+});
+
 const entryOut = (r) => ({
   id: r.id,
   date: typeof r.txn_date === 'string' ? r.txn_date : r.txn_date.toISOString().slice(0, 10),
@@ -136,6 +206,10 @@ const monthOut = (r) => ({
  */
 const MAX_ENTRIES_PER_ACCOUNT = Number(process.env.MAX_ENTRIES_PER_ACCOUNT || 50_000);
 const MAX_MONTHS_PER_ACCOUNT = Number(process.env.MAX_MONTHS_PER_ACCOUNT || 1200);
+// A category list is fixed and short, so budgets are bounded by it in practice; these
+// are the same kind of ceiling, for a client that is not the app.
+const MAX_BUDGETS_PER_ACCOUNT = 100;
+const MAX_RULES_PER_ACCOUNT = 300;
 
 /**
  * Which of these ids the account already has, so an insert can be told from an edit.
@@ -179,13 +253,15 @@ async function withinQuota(client, accountId, records, opts) {
     refused: inserts.slice(room).map((r) => ({
       id: r[column],
       kind,
-      reason: `this account is at its limit of ${max} ${kind === 'entry' ? 'entries' : 'months'}`
+      reason: `this account is at its limit of ${max} ${{ entry: 'entries', month: 'months', budget: 'budgets', recurring: 'recurring entries' }[kind] || kind}`
     }))
   };
 }
 
 /** Exported for the test suite, which checks that one bad record cannot wedge a batch. */
 export const readEntryForTest = readEntry;
+export const readBudgetForTest = readBudget;
+export const readRuleForTest = readRule;
 
 /** Exported for the test suite, which checks the ceiling lets edits and deletes through. */
 export const withinQuotaForTest = withinQuota;
@@ -224,7 +300,11 @@ export async function sync(req, res, next) {
 
     const entries = Array.isArray(body.entries) ? take(body.entries, readEntry, 'entry') : [];
     const months = Array.isArray(body.months) ? take(body.months, readMonth, 'month') : [];
-    if (entries.length > 2000 || months.length > 500) {
+    // Absent from an older client, which is fine: it simply has none to send and is
+    // sent none back it would not know what to do with.
+    const budgets = Array.isArray(body.budgets) ? take(body.budgets, readBudget, 'budget') : [];
+    const rules = Array.isArray(body.recurring) ? take(body.recurring, readRule, 'recurring') : [];
+    if (entries.length > 2000 || months.length > 500 || budgets.length > 200 || rules.length > 500) {
       throw new BadRequest('too many records in one request; send them in batches');
     }
 
@@ -235,7 +315,13 @@ export async function sync(req, res, next) {
       const monthQuota = await withinQuota(client, accountId, months, {
         table: 'months', column: 'ym', max: MAX_MONTHS_PER_ACCOUNT, kind: 'month'
       });
-      const overQuota = [...entryQuota.refused, ...monthQuota.refused];
+      const budgetQuota = await withinQuota(client, accountId, budgets, {
+        table: 'budgets', column: 'category', max: MAX_BUDGETS_PER_ACCOUNT, kind: 'budget'
+      });
+      const ruleQuota = await withinQuota(client, accountId, rules, {
+        table: 'recurring', column: 'id', max: MAX_RULES_PER_ACCOUNT, kind: 'recurring'
+      });
+      const overQuota = [...entryQuota.refused, ...monthQuota.refused, ...budgetQuota.refused, ...ruleQuota.refused];
 
       for (const e of entryQuota.allowed) {
         /*
@@ -280,6 +366,45 @@ export async function sync(req, res, next) {
         );
       }
 
+      // Same last-write-wins rule as everything above.
+      for (const b of budgetQuota.allowed) {
+        await client.query(
+          `insert into budgets (account_id, category, amount, updated_at, change_seq)
+           values ($1, $2, $3, $4, nextval('change_seq'))
+           on conflict (account_id, category) do update set
+             amount     = excluded.amount,
+             updated_at = excluded.updated_at,
+             change_seq = nextval('change_seq')
+           where excluded.updated_at > budgets.updated_at`,
+          [accountId, b.category, b.amount, b.updatedAt]
+        );
+      }
+
+      for (const r of ruleQuota.allowed) {
+        await client.query(
+          `insert into recurring
+             (id, account_id, description, amount, direction, category, day, auto, paused,
+              start_ym, skips, updated_at, deleted_at, change_seq)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, nextval('change_seq'))
+           on conflict (account_id, id) do update set
+             description = excluded.description,
+             amount      = excluded.amount,
+             direction   = excluded.direction,
+             category    = excluded.category,
+             day         = excluded.day,
+             auto        = excluded.auto,
+             paused      = excluded.paused,
+             start_ym    = excluded.start_ym,
+             skips       = excluded.skips,
+             updated_at  = excluded.updated_at,
+             deleted_at  = excluded.deleted_at,
+             change_seq  = nextval('change_seq')
+           where excluded.updated_at > recurring.updated_at`,
+          [r.id, accountId, r.description, r.amount, r.direction, r.category, r.day, r.auto,
+           r.paused, r.startYM, r.skips, r.updatedAt, r.deletedAt]
+        );
+      }
+
       // Read back inside the same transaction, so the cursor the device stores can
       // never name a change it was not sent.
       const pulledEntries = await client.query(
@@ -296,7 +421,21 @@ export async function sync(req, res, next) {
          limit $3`,
         [accountId, since, PAGE]
       );
-      return { pulledEntries: pulledEntries.rows, pulledMonths: pulledMonths.rows, overQuota };
+      const pulledBudgets = await client.query(
+        `select * from budgets where account_id = $1 and change_seq > $2 order by change_seq limit $3`,
+        [accountId, since, PAGE]
+      );
+      const pulledRules = await client.query(
+        `select * from recurring where account_id = $1 and change_seq > $2 order by change_seq limit $3`,
+        [accountId, since, PAGE]
+      );
+      return {
+        pulledEntries: pulledEntries.rows,
+        pulledMonths: pulledMonths.rows,
+        pulledBudgets: pulledBudgets.rows,
+        pulledRules: pulledRules.rows,
+        overQuota
+      };
     });
 
     // Refused for space, alongside refused for shape. Both are things the device has
@@ -305,6 +444,8 @@ export async function sync(req, res, next) {
 
     const outEntries = result.pulledEntries.map(entryOut);
     const outMonths = result.pulledMonths.map(monthOut);
+    const outBudgets = result.pulledBudgets.map(budgetOut);
+    const outRules = result.pulledRules.map(ruleOut);
 
     /*
      * The cursor only advances as far as it is safe to.
@@ -320,10 +461,12 @@ export async function sync(req, res, next) {
     const capped = [];
     if (outEntries.length === PAGE) capped.push(maxSeq(outEntries));
     if (outMonths.length === PAGE) capped.push(maxSeq(outMonths));
+    if (outBudgets.length === PAGE) capped.push(maxSeq(outBudgets));
+    if (outRules.length === PAGE) capped.push(maxSeq(outRules));
 
     const cursor = capped.length
       ? Math.min(...capped)
-      : Math.max(since, maxSeq(outEntries), maxSeq(outMonths));
+      : Math.max(since, maxSeq(outEntries), maxSeq(outMonths), maxSeq(outBudgets), maxSeq(outRules));
     const hasMore = capped.length > 0;
 
     res.json({
@@ -331,6 +474,8 @@ export async function sync(req, res, next) {
       hasMore,
       entries: outEntries,
       months: outMonths,
+      budgets: outBudgets,
+      recurring: outRules,
       rejected,
       serverTime: Date.now()
     });

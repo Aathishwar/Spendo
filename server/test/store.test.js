@@ -113,3 +113,63 @@ test('one damaged month is skipped, and the rest of the ledger still loads', asy
   assert.equal(again.entriesFor('2026-09').length, 1);
   assert.equal(again.entriesFor('2026-08').length, 0);
 });
+
+/* ------------------------------------------------------------------ autopay */
+
+test('a rule is due from its day, once per month, and done by its occurrence id', async () => {
+  const store = await freshStore(fakeStorage());
+  const id = store.saveRecurring({ description: 'Rent', amount: 4000, direction: 'out', category: 'rent', day: 5, startYM: '2026-09' });
+
+  assert.equal(store.dueRecurring('2026-10-04').filter((d) => d.ym === '2026-10').length, 0, 'not before the 5th');
+  const due = store.dueRecurring('2026-10-05');
+  assert.deepEqual(due.map((d) => d.ym), ['2026-09', '2026-10'], 'September was missed, so it is still offered');
+
+  store.addOccurrence(id, '2026-10');
+  store.addOccurrence(id, '2026-10');            // a second tap, or a second device
+  assert.equal(store.entriesFor('2026-10').length, 1);
+  assert.equal(store.entriesFor('2026-10')[0].id, `rec-${id}-2026-10`);
+
+  store.skipRecurring(id, '2026-09');
+  assert.deepEqual(store.dueRecurring('2026-10-05'), []);
+});
+
+test('the 31st falls on the last day of a short month, and paused rules are never due', async () => {
+  const store = await freshStore(fakeStorage());
+  const id = store.saveRecurring({ description: 'EMI', amount: 999, direction: 'out', category: 'bills', day: 31, startYM: '2026-09' });
+  assert.equal(store.dueDateOf(store.recurringRule(id), '2026-09'), '2026-09-30');
+  assert.equal(store.dueRecurring('2026-09-30').length, 1);
+  store.saveRecurring({ id, paused: true });
+  assert.equal(store.dueRecurring('2026-09-30').length, 0);
+});
+
+test('an amount that varies is never added on its own, and catch-up stops at two months back', async () => {
+  const store = await freshStore(fakeStorage());
+  const id = store.saveRecurring({ description: 'Power', amount: null, direction: 'out', category: 'bills', day: 1, auto: true, startYM: '2026-01' });
+  assert.equal(store.recurringRule(id).auto, false);
+  assert.equal(store.addOccurrence(id, '2026-10'), null, 'no amount to add');
+  assert.deepEqual(store.dueRecurring('2026-10-05').map((d) => d.ym), ['2026-08', '2026-09', '2026-10']);
+});
+
+test('budgets and rules are sent once and come back clean', async () => {
+  const store = await freshStore(fakeStorage());
+  store.setBudget('food', 6000);
+  const id = store.saveRecurring({ description: 'Rent', amount: 4000, direction: 'out', category: 'rent', day: 1 });
+  const out = store.pendingChanges();
+  assert.equal(out.budgets.length, 1);
+  assert.equal(out.recurring.length, 1);
+  store.applySync({
+    budgets: [{ category: 'food', amount: 6000, updatedAt: out.budgets[0].updatedAt }],
+    recurring: [{ ...out.recurring[0], id }],
+    cursor: 9
+  });
+  const after = store.pendingChanges();
+  assert.equal(after.budgets.length + after.recurring.length, 0);
+  assert.equal(store.budgetOf('food'), 6000);
+});
+
+test('a budget saved by an older build as a bare number still reads, and goes up', async () => {
+  const ls = fakeStorage({ 'spendo.v1': JSON.stringify({ version: 1, entries: [], months: {}, budgets: { food: 5000 } }) });
+  const store = await freshStore(ls);
+  assert.equal(store.budgetOf('food'), 5000);
+  assert.equal(store.pendingChanges().budgets[0].amount, 5000);
+});

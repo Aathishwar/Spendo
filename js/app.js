@@ -182,7 +182,7 @@ let lastPaint = { tab: null, ym: null };
  * first, which is where an app should open.
  */
 const PLACE_KEY = 'spendo.place';
-const TABS = ['today', 'history', 'insights', 'settings'];
+const TABS = ['today', 'insights', 'history', 'settings'];
 
 function rememberPlace() {
   try {
@@ -223,6 +223,9 @@ function render({ animate = false, from = null } = {}) {
     totals: store.categoryTotals(ym, sliceDir),
     carry: tab === 'today' ? carryFrom(ym, stats) : null,
     budgets: tab === 'insights' ? budgetsFor(ym) : null,
+    // Autopay that has come round. Only on the current month: these are about today.
+    due: tab === 'today' && ym === currentYM() ? store.dueRecurring() : null,
+    recurring: tab === 'settings' ? store.recurringRules() : null,
     otherTotals: store.categoryTotals(ym, sliceDir === 'out' ? 'in' : 'out'),
     sliceDir,
     theme: store.settings().theme,
@@ -614,6 +617,10 @@ function captureDraft() {
   if (!form) return;
   draft.amount = form.elements.amount.value;
   draft.description = form.elements.description.value;
+  if (form.elements.repeat) {
+    draft.repeat = form.elements.repeat.checked;
+    draft.repeatAuto = form.elements.repeatAuto?.value === 'auto';
+  }
 }
 
 /*
@@ -2047,6 +2054,77 @@ function openBudget(categoryId) {
   if (current) form.elements.amount.value = String(current);
 }
 
+/* ----------------------------------------------------------------- autopay */
+
+function monthWord(month) {
+  return monthLabel(month).split(' ')[0];
+}
+
+/** "Add it" on a due card: the occurrence, at its due date, with a short undo. */
+function dueAdd(ruleId, month) {
+  const rule = store.recurringRule(ruleId);
+  const saved = store.addOccurrence(ruleId, month);
+  if (!rule || !saved) return;
+  // Kept out of the push for the undo window, so an undo can remove it outright
+  // rather than leave a tombstone that would count the month as done.
+  sync.holdBack([saved.id], SNACK_LIFE);
+  render();
+  showSnack(`Added ${rule.description || 'it'} ${money(saved.amount)}`, 'Undo', () => {
+    store.purgeUnsentEntry(saved.id) || store.removeEntry(saved.id);
+    sync.release([saved.id]);
+    render();
+  }, 'repeat');
+}
+
+/** "Enter amount": the add sheet, filled in, saving to the occurrence's id. */
+function dueEnter(ruleId, month) {
+  const rule = store.recurringRule(ruleId);
+  if (!rule) return;
+  draft = {
+    direction: rule.direction,
+    category: rule.category,
+    date: store.dueDateOf(rule, month),
+    amount: '',
+    description: rule.description,
+    categoryTouched: true,
+    picked: null,
+    fromRule: { id: ruleId, ym: month, label: `${rule.description || 'this'}, ${monthWord(month)}` }
+  };
+  openSheet(ui.addSheet({ ...draft, suggestions: store.descriptionHistory(draft.direction), budget: draftBudget() }));
+}
+
+function dueSkip(ruleId, month) {
+  const rule = store.recurringRule(ruleId);
+  if (!rule) return;
+  store.skipRecurring(ruleId, month);
+  render();
+  showSnack(`Skipped ${rule.description || 'it'} for ${monthWord(month)}`, 'Undo', () => {
+    store.unskipRecurring(ruleId, month);
+    render();
+  }, 'repeat');
+}
+
+/*
+ * The ones set to add themselves. Run on launch, when the app comes back to the
+ * front, and after a sync brings rules in - never on a timer while the app sits
+ * open, which would add rent under somebody in the middle of reading the list.
+ * The occurrence id makes running it twice, or on two devices, harmless.
+ */
+function runAutopay() {
+  const added = [];
+  for (const { rule, ym: month } of store.dueRecurring()) {
+    if (!rule.auto || !(rule.amount > 0)) continue;
+    const saved = store.addOccurrence(rule.id, month);
+    if (saved) added.push({ rule, saved });
+  }
+  if (!added.length) return;
+  render();
+  const first = added[0];
+  showSnack(added.length === 1
+    ? `Added ${first.rule.description || 'it'} ${money(first.saved.amount)} on its own, as set.`
+    : `Added ${added.length} repeating entries on their own, as set.`, null, null, 'repeat');
+}
+
 /* -------------------------------------------------------------- carry over */
 
 /**
@@ -2656,6 +2734,24 @@ document.addEventListener('click', (e) => {
       break;
 
     case 'carry-over': carryOver(); break;
+    case 'due-add': dueAdd(el.dataset.rule, el.dataset.ym); break;
+    case 'due-enter': dueEnter(el.dataset.rule, el.dataset.ym); break;
+    case 'due-skip': dueSkip(el.dataset.rule, el.dataset.ym); break;
+    case 'rule-new': openSheet(ui.ruleSheet(null)); break;
+    case 'rule-open': {
+      const rule = store.recurringRule(el.dataset.rule);
+      if (rule) openSheet(ui.ruleSheet(rule));
+      break;
+    }
+    case 'rule-delete': {
+      const rule = store.recurringRule(el.dataset.rule);
+      if (!rule) break;
+      store.deleteRecurring(rule.id);
+      closeSheet();
+      render();
+      showSnack(`${rule.description || 'It'} no longer repeats. Entries already added stay.`, null, null, 'repeat');
+      break;
+    }
     case 'set-budget': openBudget(el.dataset.budgetCat); break;
 
     case 'month-money':
@@ -2692,6 +2788,10 @@ document.addEventListener('input', (e) => {
   // one of them.
   if (el.classList.contains('input-amount')) filterAmountInput(el);
   if (el.name === 'amount' && el.form && el.form.id === 'add-form') paintBudgetHint();
+  if (el.classList.contains('input-day')) {
+    const cleaned = el.value.replace(/\D/g, '').slice(0, 2);
+    if (cleaned !== el.value) el.value = cleaned;
+  }
 
   if (el.name === 'description' && el.form) {
     filterSuggestions(el.form);
@@ -2746,7 +2846,29 @@ document.addEventListener('submit', (e) => {
     if (!(amount > 0)) return fail('amount', 'Enter an amount greater than zero.');
     if (!description) return fail('description', 'Say what it was for.');
 
-    const saved = store.addEntry({ amount, description, date, direction: draft.direction, category: draft.category });
+    /*
+     * Repeating, or an occurrence of something that already repeats. Either way the
+     * entry takes the occurrence id, so the month counts as done and the same month
+     * added on another device merges into this one.
+     */
+    let ruleId = null;
+    let entryId;
+    if (draft.fromRule) {
+      entryId = store.occurrenceId(draft.fromRule.id, draft.fromRule.ym);
+    } else if (form.elements.repeat?.checked) {
+      ruleId = store.saveRecurring({
+        description,
+        amount,
+        direction: draft.direction,
+        category: draft.category,
+        day: Number(date.slice(8, 10)),
+        auto: form.elements.repeatAuto?.value === 'auto',
+        startYM: ymOf(date)
+      });
+      entryId = store.occurrenceId(ruleId, ymOf(date));
+    }
+
+    const saved = store.addEntry({ id: entryId, amount, description, date, direction: draft.direction, category: draft.category });
     draft = null;
     ym = saved.ym;
     closeSheet();
@@ -2758,7 +2880,8 @@ document.addEventListener('submit', (e) => {
       row.classList.add('is-new');
       row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
-    showSnack(`Saved ${money(saved.amount)}`, 'Undo', () => {
+    showSnack(ruleId ? `Saved ${money(saved.amount)}. Repeats every month.` : `Saved ${money(saved.amount)}`, 'Undo', () => {
+      if (ruleId) store.deleteRecurring(ruleId);
       store.removeEntry(saved.id);
       render();
     });
@@ -2816,6 +2939,54 @@ document.addEventListener('submit', (e) => {
       return;
     }
     submitCode(form.elements.email.value, code);
+    return;
+  }
+
+  if (form.id === 'rule-form') {
+    const fail = (name, message) => {
+      const slot = form.querySelector(`[data-error="${name}"]`);
+      slot.textContent = message;
+      slot.hidden = false;
+      form.elements[name].focus();
+    };
+    for (const slot of form.querySelectorAll('.field-error')) slot.hidden = true;
+
+    const description = form.elements.description.value.trim();
+    const rawAmount = String(form.elements.amount.value).trim();
+    const amount = rawAmount === '' ? null : Number(rawAmount);
+    const day = Number(form.elements.day.value);
+    const direction = form.querySelector('input[name="direction"]:checked')?.value === 'in' ? 'in' : 'out';
+    const allowed = categoriesFor(direction).map((c) => c.id);
+    const picked = form.querySelector('input[name="category"]:checked')?.value;
+    const auto = form.elements.auto.checked;
+
+    if (!description) return fail('description', 'Say what it is.');
+    if (amount !== null && !(amount > 0)) return fail('amount', 'Enter an amount, or leave it empty if it changes.');
+    if (!Number.isInteger(day) || day < 1 || day > 31) return fail('day', 'A day from 1 to 31.');
+    if (auto && amount === null) return fail('amount', 'Adding it on its own needs a fixed amount.');
+
+    const existing = form.dataset.rule ? store.recurringRule(form.dataset.rule) : null;
+    // A new rule starts with the next time its day comes round: set up on the 5th
+    // for the 1st, this month's rent is assumed already recorded.
+    const today = todayISO();
+    const startYM = existing ? existing.startYM
+      : Number(today.slice(8, 10)) <= day ? currentYM() : shiftYM(currentYM(), 1);
+
+    store.saveRecurring({
+      id: existing?.id,
+      description,
+      amount,
+      direction,
+      category: allowed.includes(picked) ? picked : (direction === 'in' ? 'income' : 'other'),
+      day,
+      auto,
+      paused: form.elements.paused ? form.elements.paused.checked : false,
+      startYM
+    });
+    closeSheet();
+    render();
+    showSnack(existing ? 'Saved.' : `${description} repeats every month.`, null, null, 'repeat');
+    runAutopay();
     return;
   }
 
@@ -2936,7 +3107,11 @@ sync.onSyncChange(() => {
  *
  * Not animated: this is the same screen catching up, not a new one arriving.
  */
-sync.onRemoteChange(() => render());
+sync.onRemoteChange(() => {
+  render();
+  // Rules may have just arrived from another device.
+  runAutopay();
+});
 
 // Settings shows the address, so it repaints when the account changes. Signing in
 // and out both re-render directly too; this covers the third case, a session the
@@ -2969,6 +3144,13 @@ account.refresh().then(() => {
   }
   sync.startSync();
   maybeNudgeSignIn();
+  // After the first sync has had a moment to bring in what other devices did, so a
+  // month already added or skipped elsewhere is not added here first.
+  setTimeout(runAutopay, account.isSignedIn() ? 3000 : 0);
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !sheet.open) runAutopay();
 });
 
 // The "Add expense" shortcut. Honour it, or it is a menu item on the user's home

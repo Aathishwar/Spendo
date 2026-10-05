@@ -137,6 +137,48 @@ create table if not exists expenses (
 create index if not exists expenses_pull_idx on expenses (account_id, change_seq);
 create index if not exists expenses_month_idx on expenses (account_id, ym);
 
+-- --------------------------------------------- budgets and recurring entries
+
+-- One monthly budget per spending category. Zero means none; the row is kept so the
+-- removal syncs like any other change.
+create table if not exists budgets (
+  account_id uuid not null references accounts(id) on delete cascade,
+  category   text not null,
+  amount     numeric(14, 2) not null default 0 check (amount >= 0),
+  updated_at timestamptz not null,
+  change_seq bigint not null,
+  primary key (account_id, category)
+);
+
+create index if not exists budgets_pull_idx on budgets (account_id, change_seq);
+
+-- Autopay: something that comes round every month on the same day. The rule only
+-- says what and when; each month's occurrence is an ordinary row in expenses, with
+-- an id built from the rule and the month (rec-<rule>-<ym>), so two devices adding
+-- the same month's rent produce one row rather than two.
+create table if not exists recurring (
+  id          text not null,
+  account_id  uuid not null references accounts(id) on delete cascade,
+  description text not null default '',
+  -- Null when the amount changes month to month, so it is asked for each time.
+  amount      numeric(14, 2) check (amount is null or amount >= 0),
+  direction   text not null check (direction in ('in', 'out')),
+  category    text not null,
+  day         smallint not null check (day between 1 and 31),
+  auto        boolean not null default false,
+  paused      boolean not null default false,
+  -- The first month it applies to. Earlier months are never offered.
+  start_ym    text not null,
+  -- Months skipped on purpose, comma separated: 2026-10,2026-11.
+  skips       text not null default '',
+  updated_at  timestamptz not null,
+  deleted_at  timestamptz,
+  change_seq  bigint not null,
+  primary key (account_id, id)
+);
+
+create index if not exists recurring_pull_idx on recurring (account_id, change_seq);
+
 -- There is deliberately no balance column anywhere in this file. Balance is
 -- computed from opening_amount and the entries ordered by (txn_date, id). Storing
 -- it is what made the n8n workflow rewrite every row on any backdated change, and
